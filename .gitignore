@@ -1,0 +1,17 @@
+.env
+server/config.json
+server/config.local.json
+server/*.log
+server/logs/
+server/data/
+server/hypergryph.jar
+server/*.jar.bak
+tmp/
+reference/
+__pycache__/
+*.pyc
+.venv/
+bridge/flows/
+bridge/*.log
+
+
