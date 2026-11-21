@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% set active = 'accounts' %}
+{% block title %}账号管理 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">ACCOUNTS</p><h1>账号管理</h1></div>
+</header>
+
+<section class="panel">
+  <div class="panel-head"><h2>新建账号</h2></div>
+  <form class="inline-form" method="post" action="/admin/accounts/create">
+    <label>手机号<input name="phone" placeholder="13800138000" required></label>
+    <label>昵称<input name="nickname" value="博士"></label>
+    <label>Token（留空自动生成）<input name="token" placeholder="lab_..."></label>
+    <button class="primary" type="submit">创建</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>账号列表</h2><span class="muted">{{ accounts|length }} 个</span></div>
+  <table class="table">
+    <thead><tr><th>UID</th><th>手机号</th><th>昵称</th><th>Token</th><th>状态</th><th></th></tr></thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td class="mono">{{ a.uid }}</td>
+        <td>{{ a.phone }}</td>
+        <td>{{ a.nickname }}</td>
+        <td class="mono token">{{ a.token }}</td>
+        <td>{% if a.banned %}<span class="status s5">封禁</span>{% else %}<span class="status s2">正常</span>{% endif %}</td>
+        <td><a class="btn" href="/admin/accounts/{{ a.uid }}">编辑</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">暂无账号，先创建一个。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+

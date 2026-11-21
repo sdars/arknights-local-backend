@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% set active = 'accounts' %}
+{% block title %}编辑 {{ account.uid }} · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">ACCOUNT</p><h1>UID {{ account.uid }}</h1></div>
+  <a class="btn" href="/admin/accounts">返回列表</a>
+</header>
+
+<section class="panel">
+  <form class="form" method="post" action="/admin/accounts/{{ account.uid }}/update">
+    <label>手机号<input name="phone" value="{{ account.phone }}" required></label>
+    <label>昵称<input name="nickname" value="{{ account.nickname }}" required></label>
+    <label>Token<input name="token" value="{{ account.token }}" required></label>
+    <label>状态
+      <select name="banned">
+        <option value="0" {% if not account.banned %}selected{% endif %}>正常</option>
+        <option value="1" {% if account.banned %}selected{% endif %}>封禁</option>
+      </select>
+    </label>
+    <div class="actions"><button class="primary" type="submit">保存</button></div>
+  </form>
+</section>
+
+<section class="panel danger-zone">
+  <div class="panel-head"><h2>危险操作</h2></div>
+  <div class="actions">
+    <form method="post" action="/admin/accounts/{{ account.uid }}/reset-token"><button class="btn" type="submit">重置 Token</button></form>
+    <form method="post" action="/admin/accounts/{{ account.uid }}/delete" onsubmit="return confirm('确定删除该账号？')"><button class="danger" type="submit">删除账号</button></form>
+  </div>
+</section>
+{% endblock %}
+

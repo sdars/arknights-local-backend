@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Arknights 本机后端{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="layout">
+    {% if admin %}
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div>
+          <strong>ARKNIGHTS</strong>
+          <span>本机后端</span>
+        </div>
+      </div>
+      <nav>
+        <a href="/admin" class="{% if active == 'dashboard' %}active{% endif %}">仪表盘</a>
+        <a href="/admin/accounts" class="{% if active == 'accounts' %}active{% endif %}">账号管理</a>
+        <a href="/admin/logs" class="{% if active == 'logs' %}active{% endif %}">请求日志</a>
+        <a href="/admin/settings" class="{% if active == 'settings' %}active{% endif %}">服务设置</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span>{{ admin }}</span>
+        <form method="post" action="/admin/logout"><button class="link">退出</button></form>
+      </div>
+    </aside>
+    {% endif %}
+    <main class="main {% if not admin %}centered{% endif %}">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>
+

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% set active = 'logs' %}
+{% block title %}请求日志 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">REQUEST LOG</p><h1>请求日志</h1></div>
+  <span class="muted">最近 500 条</span>
+</header>
+<section class="panel">
+  <table class="table">
+    <thead><tr><th>时间</th><th>方法</th><th>路径</th><th>状态</th><th>UID</th><th>IP</th><th>耗时</th></tr></thead>
+    <tbody>
+    {% for l in logs %}
+      <tr>
+        <td class="mono">{{ l.ts }}</td><td>{{ l.method }}</td><td class="mono">{{ l.path }}</td>
+        <td><span class="status s{{ l.status // 100 }}">{{ l.status }}</span></td>
+        <td class="mono">{{ l.uid or '-' }}</td><td class="mono">{{ l.ip or '-' }}</td><td>{{ l.ms }}ms</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">暂无请求</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
