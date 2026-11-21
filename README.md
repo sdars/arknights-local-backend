@@ -79,6 +79,14 @@ docker compose up -d
 
 启动明日方舟，标题页点击“开始唤醒”。首次会出现语音包选择，选择任意一项并确认；随后客户端会请求本机后端并进入教学。
 
+### 6. 健康检查
+
+```bash
+./scripts/healthcheck.sh
+```
+
+检查后端、MySQL、mitm 桥接、ADB 设备与两个 reverse 端口。
+
 ## 目录
 
 | 路径 | 用途 |
