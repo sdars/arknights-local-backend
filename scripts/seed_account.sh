@@ -2,32 +2,29 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
-
-: "${MYSQL_DATABASE:=arknights}"
-: "${MYSQL_USER:=ark}"
-: "${MYSQL_PASSWORD:=change-me-ark}"
+PYTHON="${ARK_PYTHON:-/root/Knight/.venv/bin/python}"
 : "${ARK_PHONE:=13800138000}"
 : "${ARK_TOKEN:=lab_manual_token}"
+: "${ARK_NICKNAME:=博士}"
 : "${ADB_SERIAL:=}"
 
-echo "[1/2] seed MySQL account ${ARK_PHONE} token=${ARK_TOKEN}"
-mysql -h127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" <<SQL
--- 同一个 secret 只保留一行；历史上重复 seed 会生成多行，导致后端 queryAccountBySecret 返回 >1 而拒绝登录。
-DELETE a FROM account a JOIN account b ON a.secret = b.secret AND a.uid > b.uid;
-INSERT INTO account (phone, password, secret, user, mails, assistCharList, friend, ban)
-SELECT '${ARK_PHONE}', MD5('ArkNightsLoongling001'), '${ARK_TOKEN}', '{}', '[]', '[]', '[]', 0
-WHERE NOT EXISTS (SELECT 1 FROM account WHERE secret = '${ARK_TOKEN}');
-UPDATE account
-SET phone = '${ARK_PHONE}',
-    password = MD5('ArkNightsLoongling001')
-WHERE secret = '${ARK_TOKEN}';
-SQL
+echo "[1/2] seed SQLite account phone=${ARK_PHONE} token=${ARK_TOKEN}"
+cd backend
+ARK_PHONE="$ARK_PHONE" ARK_TOKEN="$ARK_TOKEN" ARK_NICKNAME="$ARK_NICKNAME" "$PYTHON" - <<'PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from app.services import create_account
+
+account, created = create_account(
+    os.environ["ARK_PHONE"],
+    os.environ["ARK_TOKEN"],
+    os.environ.get("ARK_NICKNAME", "博士"),
+)
+print("uid=%s created=%s" % (account["uid"], created))
+PY
+cd ..
 
 if [[ -z "$ADB_SERIAL" ]]; then
   echo "ADB_SERIAL 为空，跳过设备登录缓存写入"
@@ -51,4 +48,3 @@ XML
 adb -s "$ADB_SERIAL" push tmp/ark-sdk-prefs.xml /sdcard/ark-sdk-prefs.xml >/dev/null
 adb -s "$ADB_SERIAL" shell "su -c 'APP_UID=\$(stat -c %u /data/data/com.hypergryph.arknights); APP_GID=\$(stat -c %g /data/data/com.hypergryph.arknights); cp /sdcard/ark-sdk-prefs.xml /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml; chown \$APP_UID:\$APP_GID /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml; chmod 660 /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml; restorecon /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml'"
 echo "done; force-stop the game before next launch: adb -s ${ADB_SERIAL} shell am force-stop com.hypergryph.arknights"
-

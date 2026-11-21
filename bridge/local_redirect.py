@@ -65,9 +65,12 @@ def request(flow: mhttp.HTTPFlow) -> None:
             try:
                 obj = json.loads(body)
                 data = obj.setdefault("data", {})
+                if isinstance(data, str):
+                    data = json.loads(data)
                 data["code"] = TOKEN
                 data["token"] = TOKEN
                 data["uid"] = UID
+                obj["data"] = data
                 flow.response = make_resp(200, sdk_wrap(obj))
                 print("BACKEND grant ok")
                 return

@@ -2,13 +2,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
-
 : "${SERVER_URL:=http://127.0.0.1:8443}"
 : "${ADB_SERIAL:=}"
 : "${MITM_PORT:=8080}"
@@ -29,18 +22,12 @@ check_http() {
 
 check_http "server_time" "$SERVER_URL/general/v1/server_time"
 check_http "network_config" "$SERVER_URL/api/remote_config/1/prod/default/Android/network_config"
+check_http "webui_login" "$SERVER_URL/admin/login"
 
-if docker ps --filter name=arkmysql --format '{{.Status}}' | grep -q '^Up'; then
-  echo "OK   mysql container"
+if ps -eo args | grep -q '[p]ython run.py'; then
+  echo "OK   python backend process"
 else
-  echo "FAIL mysql container"
-  fail=1
-fi
-
-if ps -eo args | grep -q '[h]ypergryph.jar'; then
-  echo "OK   java backend process"
-else
-  echo "FAIL java backend process"
+  echo "FAIL python backend process"
   fail=1
 fi
 
@@ -58,19 +45,14 @@ if [[ -n "$ADB_SERIAL" ]]; then
     echo "FAIL adb device $ADB_SERIAL"
     fail=1
   fi
-  if adb -s "$ADB_SERIAL" reverse --list | grep -q "tcp:${SERVER_HTTP_PORT}"; then
-    echo "OK   adb reverse ${SERVER_HTTP_PORT}"
-  else
-    echo "FAIL adb reverse ${SERVER_HTTP_PORT}"
-    fail=1
-  fi
-  if adb -s "$ADB_SERIAL" reverse --list | grep -q "tcp:${MITM_PORT}"; then
-    echo "OK   adb reverse ${MITM_PORT}"
-  else
-    echo "FAIL adb reverse ${MITM_PORT}"
-    fail=1
-  fi
+  for port in "$SERVER_HTTP_PORT" "$MITM_PORT"; do
+    if adb -s "$ADB_SERIAL" reverse --list | grep -q "tcp:${port}"; then
+      echo "OK   adb reverse ${port}"
+    else
+      echo "FAIL adb reverse ${port}"
+      fail=1
+    fi
+  done
 fi
 
 exit "$fail"
-

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}登录 · Arknights 本机后端{% endblock %}
+{% block content %}
+<div class="login-card">
+  <div class="login-mark">A</div>
+  <h1>ARKNIGHTS <span>LOCAL</span></h1>
+  <p class="muted">本机服务端管理台</p>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/admin/login">
+    <label>管理员账号<input name="username" value="sdars" autocomplete="username" required></label>
+    <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit">进入管理台</button>
+  </form>
+  <p class="hint">默认账号 sdars / 123456，建议首次登录后在设置中修改。</p>
+</div>
+{% endblock %}
+

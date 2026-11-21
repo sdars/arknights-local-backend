@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% set active = 'settings' %}
+{% block title %}服务设置 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">SETTINGS</p><h1>服务设置</h1></div>
+</header>
+<section class="panel">
+  <form class="form" method="post" action="/admin/settings">
+    <label>服务器名称<input name="server_name" value="{{ server_name }}" required></label>
+    <label>登录公告<textarea name="announcement" rows="4">{{ announcement }}</textarea></label>
+    <div class="actions"><button class="primary" type="submit">保存</button></div>
+  </form>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>版本信息</h2></div>
+  <dl class="kv">
+    <dt>客户端版本</dt><dd class="mono">{{ client_version }}</dd>
+    <dt>资源版本</dt><dd class="mono">{{ res_version }}</dd>
+    <dt>管理台账号</dt><dd>sdars（密码在首次启动时由环境变量 ARK_ADMIN_PASSWORD 初始化）</dd>
+  </dl>
+</section>
+{% endblock %}
+

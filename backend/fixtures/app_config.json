@@ -1,0 +1,99 @@
+{
+ "data": {
+  "antiAddiction": {
+   "minorPeriodEnd": 21,
+   "minorPeriodStart": 20
+  },
+  "payment": [
+   {
+    "key": "alipay",
+    "recommend": true
+   },
+   {
+    "key": "wechat",
+    "recommend": false
+   },
+   {
+    "key": "pcredit",
+    "recommend": false
+   }
+  ],
+  "customerServiceUrl": "https://chat.hypergryph.com/chat/h5/v2/index.html?sysnum=889ee281e3564ddf883942fe85764d44&channelid=2",
+  "cancelDeactivateUrl": "https://user.hypergryph.com/cancellation",
+  "agreementUrl": {
+   "game": "https://user.hypergryph.com/protocol/plain/ak/index",
+   "unbind": "https://user.hypergryph.com/protocol/plain/ak/cancellation",
+   "gameService": "https://user.hypergryph.com/protocol/plain/ak/service",
+   "account": "https://user.hypergryph.com/protocol/plain/index",
+   "privacy": "https://user.hypergryph.com/protocol/plain/privacy",
+   "register": "https://user.hypergryph.com/protocol/plain/registration",
+   "updateOverview": "https://user.hypergryph.com/protocol/plain/overview_of_changes",
+   "childrenPrivacy": "https://user.hypergryph.com/protocol/plain/children_privacy"
+  },
+  "app": {
+   "enablePayment": true,
+   "enableAutoLogin": true,
+   "enableAuthenticate": false,
+   "enableAntiAddiction": false,
+   "enableUnbindGrant": true,
+   "wechatAppId": "wx0ae7fb63d830f7c1",
+   "alipayAppId": "2018091261385264",
+   "oneLoginAppId": "7af226e84f13f17bd256eca8e1e61b5a",
+   "enablePaidApp": false,
+   "appName": "明日方舟",
+   "appAmount": 600,
+   "needShowName": false,
+   "customerServiceUrl": "https://customer-service.hypergryph.com/ak?hg_token={hg_token}&source_from=sdk",
+   "needAntiAddictionAlert": true,
+   "enableScanLogin": true,
+   "deviceCheckMode": 2,
+   "enableGiftCode": true,
+   "giftCodeUrl": "https://ak.hypergryph.com/user/gift?hg_token={hg_token}&source_from=sdk",
+   "enableScanAppList": [
+    {
+     "appCode": "7318def77669979d",
+     "name": "明日方舟",
+     "iconUrl": "https://web.hycdn.cn/biz_toolset/upload/251225/8rgeeodzqnGZN4wH.jpg"
+    },
+    {
+     "appCode": "4ca99fa6b56cc2ba",
+     "name": "森空岛",
+     "iconUrl": "https://web.hycdn.cn/biz_toolset/upload/251225/qYm0f7X8LMaLkRRL.jpg"
+    }
+   ],
+   "gameAgreement": [
+    {
+     "url": "https://user.hypergryph.com/protocol/plain/ak/service",
+     "name": "游戏使用许可及服务协议",
+     "key": "service"
+    },
+    {
+     "url": "https://user.hypergryph.com/protocol/plain/ak/privacy",
+     "name": "游戏个人信息保护政策",
+     "key": "privacy"
+    },
+    {
+     "url": "https://user.hypergryph.com/protocol/plain/ak/children_privacy",
+     "name": "儿童个人信息保护政策",
+     "key": "children_privacy"
+    },
+    {
+     "url": "https://user.hypergryph.com/protocol/plain/ak/privacy_summary",
+     "name": "游戏个人信息保护政策(简版)",
+     "key": "privacy"
+    }
+   ],
+   "enableScanCamera": true,
+   "showCustomerService": true,
+   "showAccountAgreement": true,
+   "storeRatingDisplayMode": 0
+  },
+  "scanUrl": {
+   "login": "hypergryph://scan_login"
+  },
+  "userCenterUrl": "https://user.hypergryph.com/pcSdk/userInfo"
+ },
+ "msg": "OK",
+ "status": 0,
+ "type": "A"
+}
