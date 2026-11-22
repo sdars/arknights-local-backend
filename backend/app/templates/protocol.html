@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% set active = 'protocol' %}
+{% block title %}协议索引 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">STATIC PROTOCOL</p><h1>协议索引</h1></div>
+  <span class="pill">metadata v29</span>
+</header>
+
+<section class="cards">
+  <div class="card"><span class="muted">后端路由</span><strong>{{ catalog.counts.routes or 0 }}</strong></div>
+  <div class="card"><span class="muted">协议类型</span><strong>{{ catalog.counts.protocol_types or 0 }}</strong></div>
+  <div class="card"><span class="muted">Request/Response 明细</span><strong>{{ catalog.detailed_types or 0 }}</strong></div>
+  <div class="card"><span class="muted">全量类型</span><strong>{{ catalog.counts.types or 0 }}</strong></div>
+</section>
+
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>索引来源</h2><span class="muted">{{ catalog.artifacts.metadata_sha256[:16] if catalog.artifacts.metadata_sha256 else '未生成' }}…</span></div>
+  <div class="policy-grid">
+    <div><strong>静态提取</strong><span>来自运行内存中解密后的 metadata v29 string literal 表，不依赖 UI 点击。</span></div>
+    <div><strong>可复核</strong><span>每条路由保留 string literal index 与 data index；类型保留 field/method 数量和字段明细。</span></div>
+    <div><strong>后端可用</strong><span>Web UI、测试和脚本读取同一份 catalog；重建按钮直接调用后端任务。</span></div>
+  </div>
+  <div class="actions">
+    <form method="post" action="/admin/protocol/rebuild">
+      <button class="primary" type="submit">从内存 metadata 重建索引</button>
+    </form>
+    <a class="btn" href="/admin/protocol/api?q={{ q|urlencode }}&kind={{ kind|urlencode }}">查看 JSON API</a>
+    {% if request.query_params.get('rebuilt') == '1' %}<span class="gate g-done">索引已重建</span>{% endif %}
+    {% if request.query_params.get('rebuilt') == '0' %}<span class="gate g-failed">重建失败，检查 logs/catalog-rebuild.log</span>{% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>路由</h2><span class="muted">{{ route_total }} 条匹配</span></div>
+  <form class="filter-form" method="get" action="/admin/protocol">
+    <input name="q" value="{{ q }}" placeholder="搜索 /account、battle、gacha…">
+    <select name="kind">
+      <option value="" {% if not kind %}selected{% endif %}>全部阶段</option>
+      <option value="sdk" {% if kind == 'sdk' %}selected{% endif %}>SDK</option>
+      <option value="core" {% if kind == 'core' %}selected{% endif %}>核心</option>
+      <option value="feature" {% if kind == 'feature' %}selected{% endif %}>玩法</option>
+    </select>
+    <button type="submit">筛选</button>
+  </form>
+  <table class="table">
+    <thead><tr><th>路由</th><th>阶段</th><th>literal</th><th>data</th></tr></thead>
+    <tbody>
+    {% for route in routes %}
+      <tr><td class="mono">{{ route.path }}</td><td><span class="gate g-{{ 'done' if route.kind == 'core' else 'pending' }}">{{ route.kind }}</span></td><td class="mono">{{ route.string_literal_index }}</td><td class="mono">{{ route.data_index }}</td></tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">没有匹配路由</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>协议类型</h2><span class="muted">{{ type_total }} 条匹配，显示前 {{ types|length }} 条</span></div>
+  <table class="table">
+    <thead><tr><th>类型</th><th>字段</th><th>方法</th><th>明细</th></tr></thead>
+    <tbody>
+    {% for item in types %}
+      <tr>
+        <td class="mono">{{ item.name }}</td>
+        <td>{{ item.field_count }}</td><td>{{ item.method_count }}</td>
+        <td>{% if item.fields is defined %}<a href="/admin/protocol/type?name={{ item.name|urlencode }}">查看</a>{% else %}<span class="muted">摘要</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">没有匹配类型</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

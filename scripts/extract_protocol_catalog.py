@@ -224,9 +224,13 @@ def main():
     version, header = read_header(blob)
     routes = parse_routes(blob, header)
     all_types, protocol_types = parse_types(blob, header)
+    try:
+        source_label = str(args.metadata.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        source_label = str(args.metadata)
     payload = {
         "schema": 1,
-        "source": str(args.metadata),
+        "source": source_label,
         "metadata_version": version,
         "artifacts": {
             "metadata_size": len(blob),

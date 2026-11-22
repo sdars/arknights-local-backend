@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% set active = 'protocol' %}
+{% block title %}{{ name }} · 协议类型{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">PROTOCOL TYPE</p><h1 class="mono">{{ name }}</h1></div>
+  <a class="btn" href="/admin/protocol">返回索引</a>
+</header>
+{% if item %}
+<section class="cards">
+  <div class="card"><span class="muted">字段</span><strong>{{ item.field_count }}</strong></div>
+  <div class="card"><span class="muted">方法</span><strong>{{ item.method_count }}</strong></div>
+  <div class="card"><span class="muted">明细</span><strong class="small">{{ '已展开' if item.fields is defined else '摘要' }}</strong></div>
+</section>
+{% if item.fields is defined %}
+<section class="panel">
+  <div class="panel-head"><h2>字段</h2></div>
+  <table class="table"><thead><tr><th>名称</th><th>类型索引</th></tr></thead><tbody>
+  {% for field in item.fields %}<tr><td class="mono">{{ field.name }}</td><td class="mono">{{ field.type_index }}</td></tr>{% else %}<tr><td colspan="2" class="muted">无字段</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>方法</h2></div>
+  <table class="table"><thead><tr><th>名称</th><th>参数</th></tr></thead><tbody>
+  {% for method in item.methods %}<tr><td class="mono">{{ method.name }}</td><td class="mono">{{ method.parameters|map(attribute='name')|join(', ') }}</td></tr>{% else %}<tr><td colspan="2" class="muted">无方法</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+{% else %}
+<section class="panel"><p class="muted">未找到类型：{{ name }}</p></section>
+{% endif %}
+{% endblock %}

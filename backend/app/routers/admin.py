@@ -12,6 +12,7 @@ from ..db import connect, get_setting, set_setting, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
 from .. import selfcheck
+from .. import protocol_catalog
 
 router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -178,6 +179,71 @@ async def development_page(request: Request):
         "development.html",
         {"admin": admin_name(request), "status": status, "gate_done": gate_done},
     )
+
+
+@router.get("/protocol", response_class=HTMLResponse)
+async def protocol_page(request: Request, q: str = "", kind: str = "", limit: int = 160):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    catalog = protocol_catalog.summary()
+    routes, route_total = protocol_catalog.search_routes(q, kind, limit)
+    types, type_total = protocol_catalog.search_types(q, limit=60)
+    return templates.TemplateResponse(
+        request,
+        "protocol.html",
+        {
+            "admin": admin_name(request),
+            "catalog": catalog,
+            "routes": routes,
+            "route_total": route_total,
+            "types": types,
+            "type_total": type_total,
+            "q": q,
+            "kind": kind,
+            "limit": limit,
+        },
+    )
+
+
+@router.get("/protocol/api")
+async def protocol_api(request: Request, q: str = "", kind: str = "", limit: int = 200):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    routes, total = protocol_catalog.search_routes(q, kind, limit)
+    return JSONResponse(
+        {
+            "summary": protocol_catalog.summary()["counts"],
+            "query": q,
+            "kind": kind,
+            "total": total,
+            "routes": routes,
+        }
+    )
+
+
+@router.get("/protocol/type", response_class=HTMLResponse)
+async def protocol_type(request: Request, name: str = ""):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    item = protocol_catalog.get_type(name)
+    return templates.TemplateResponse(
+        request,
+        "protocol_type.html",
+        {"admin": admin_name(request), "item": item, "name": name},
+        status_code=200 if item else 404,
+    )
+
+
+@router.post("/protocol/rebuild")
+async def protocol_rebuild(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    result = await run_in_threadpool(protocol_catalog.rebuild_from_memory_dump)
+    return RedirectResponse(f"/admin/protocol?rebuilt={'1' if result.get('ok') else '0'}", status_code=303)
 
 
 @router.post("/development/run-tests")

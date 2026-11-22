@@ -96,6 +96,9 @@
         {{ '测试运行中…' if status.tests_running else '运行无头协议测试' }}
       </button>
     </form>
+    <form method="post" action="/admin/protocol/rebuild">
+      <button type="submit">重建协议索引</button>
+    </form>
     <span class="muted">JUnit：{% if status.report %}{{ status.report.mtime }} · {{ status.report.time }}s{% else %}尚未生成{% endif %}</span>
   </div>
   <table class="table">

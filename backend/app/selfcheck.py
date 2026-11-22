@@ -54,6 +54,7 @@ PROTOCOL_ENDPOINTS = [
     {"stage": "战斗", "method": "POST", "path": "/quest/battleStart", "test": "test_battle_start", "desc": "开始战斗"},
     {"stage": "战斗", "method": "POST", "path": "/quest/battleFinish", "test": "test_battle_finish", "desc": "结束战斗"},
     {"stage": "后台", "method": "GET", "path": "/admin/login", "test": "test_admin_login_page", "desc": "管理后台登录页"},
+    {"stage": "研发", "method": "GET", "path": "/admin/protocol", "test": "test_protocol_index_and_api", "desc": "静态协议索引"},
     {"stage": "持久化", "method": "POST", "path": "/account/syncData", "test": "test_sync_data_persists_last_refresh_ts", "desc": "lastRefreshTs 持久化"},
 ]
 
