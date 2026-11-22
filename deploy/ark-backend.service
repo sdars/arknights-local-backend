@@ -1,0 +1,17 @@
+[Unit]
+Description=Arknights local FastAPI backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/mingrifangzhouyun/backend
+Environment=ARK_HOST=0.0.0.0
+Environment=ARK_PORT=8443
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/mingrifangzhouyun/backend/start.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

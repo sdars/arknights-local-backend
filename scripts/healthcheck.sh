@@ -4,8 +4,10 @@ cd "$(dirname "$0")/.."
 
 : "${SERVER_URL:=http://127.0.0.1:8443}"
 : "${ADB_SERIAL:=}"
-: "${MITM_PORT:=8080}"
 : "${SERVER_HTTP_PORT:=8443}"
+: "${MITM_REVERSE_PORT:=4443}"
+: "${DEVICE_SDK_PORT:=8444}"
+: "${DEVICE_HTTPS_PORT:=443}"
 
 fail=0
 check_http() {
@@ -20,6 +22,7 @@ check_http() {
   fi
 }
 
+check_http "healthz" "$SERVER_URL/healthz"
 check_http "server_time" "$SERVER_URL/general/v1/server_time"
 check_http "network_config" "$SERVER_URL/api/remote_config/1/prod/default/Android/network_config"
 check_http "webui_login" "$SERVER_URL/admin/login"
@@ -31,10 +34,10 @@ else
   fail=1
 fi
 
-if ps -eo args | grep -q '[m]itmdump.*local_redirect.py'; then
-  echo "OK   mitm bridge process"
+if pgrep -f 'mitmdump.*reverse:http://127.0.0.1:8443.*listen-port 4443' >/dev/null 2>&1; then
+  echo "OK   mitm TLS reverse process"
 else
-  echo "FAIL mitm bridge process"
+  echo "FAIL mitm TLS reverse process"
   fail=1
 fi
 
@@ -45,14 +48,37 @@ if [[ -n "$ADB_SERIAL" ]]; then
     echo "FAIL adb device $ADB_SERIAL"
     fail=1
   fi
-  for port in "$SERVER_HTTP_PORT" "$MITM_PORT"; do
-    if adb -s "$ADB_SERIAL" reverse --list | grep -q "tcp:${port}"; then
-      echo "OK   adb reverse ${port}"
-    else
-      echo "FAIL adb reverse ${port}"
-      fail=1
-    fi
-  done
+  if adb -s "$ADB_SERIAL" reverse --list 2>/dev/null | grep -q "tcp:${SERVER_HTTP_PORT} tcp:${SERVER_HTTP_PORT}"; then
+    echo "OK   adb reverse ${SERVER_HTTP_PORT}"
+  else
+    echo "FAIL adb reverse ${SERVER_HTTP_PORT}"
+    fail=1
+  fi
+  if adb -s "$ADB_SERIAL" reverse --list 2>/dev/null | grep -q "tcp:${DEVICE_SDK_PORT} tcp:${MITM_REVERSE_PORT}"; then
+    echo "OK   adb reverse ${DEVICE_SDK_PORT} -> ${MITM_REVERSE_PORT}"
+  else
+    echo "FAIL adb reverse ${DEVICE_SDK_PORT} -> ${MITM_REVERSE_PORT}"
+    fail=1
+  fi
+  proxy=$(adb -s "$ADB_SERIAL" shell settings get global http_proxy 2>/dev/null | tr -d '\r' || true)
+  if [[ "$proxy" == ":0" || "$proxy" == "null" ]]; then
+    echo "OK   device proxy disabled"
+  else
+    echo "FAIL device proxy is '$proxy'"
+    fail=1
+  fi
+  if adb -s "$ADB_SERIAL" shell 'ps -A -o ARGS | grep -q "[n]c -p 443 -L nc 127.0.0.1 8444"' >/dev/null 2>&1; then
+    echo "OK   device 443 -> 8444 forward"
+  else
+    echo "FAIL device 443 -> 8444 forward"
+    fail=1
+  fi
+  if adb -s "$ADB_SERIAL" shell 'grep -q "^127.0.0.1 as.hypergryph.com$" /system/etc/hosts' >/dev/null 2>&1; then
+    echo "OK   device hosts mapping"
+  else
+    echo "FAIL device hosts mapping"
+    fail=1
+  fi
 fi
 
 exit "$fail"

@@ -1,0 +1,17 @@
+[Unit]
+Description=Arknights ADB/device/link watchdog
+After=network-online.target ark-backend.service ark-mitm.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/mingrifangzhouyun
+EnvironmentFile=-/root/mingrifangzhouyun/.env
+Environment=ARK_HOST=0.0.0.0
+Environment=ARK_WATCHDOG_INTERVAL=15
+ExecStart=/root/mingrifangzhouyun/scripts/watchdog.sh --loop
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

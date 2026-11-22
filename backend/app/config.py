@@ -18,6 +18,7 @@ SERVER_NAME = os.environ.get("ARK_SERVER_NAME", "泰拉")
 CLIENT_VERSION = os.environ.get("ARK_CLIENT_VERSION", "2.7.91")
 RES_VERSION = os.environ.get("ARK_RES_VERSION", "26-11-13-06-37-23-89286612")
 SERVER_URL = os.environ.get("ARK_SERVER_URL", "http://127.0.0.1:8443")
+ASSET_CDN = os.environ.get("ARK_ASSET_CDN", "https://ak.hycdn.cn/assetbundle/official")
 
 APP_CODE = "7318def77669979d"
 CONFIG_VER = "5"

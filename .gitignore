@@ -13,6 +13,7 @@ __pycache__/
 .venv/
 bridge/flows/
 bridge/*.log
+logs/
 
 # Python self-hosted backend runtime state
 backend/data/*.sqlite3

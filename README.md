@@ -9,16 +9,20 @@
 ```
 Android 客户端（com.hypergryph.arknights 2.7.91）
   │
-  ├─ 系统代理 127.0.0.1:8080 ──adb reverse──▶ mitmdump bridge
-  │     └─ as.hypergryph.com 的 basic / grant / update_agreement
-  │        转发到本机 127.0.0.1:8443
+  ├─ 游戏 API http://127.0.0.1:8443 ──adb reverse──▶ Python 后端 8443
+  │     └─ /account/login、/account/syncData、/quest/*、/user/* …
   │
-  └─ 游戏 API http://127.0.0.1:8443 ──adb reverse──▶ Python 后端
-        /account/login、/account/syncData、/quest/*、/user/* …
+  └─ Hypergryph SDK https://as.hypergryph.com:443
+        └─ 设备 /system/etc/hosts 指向 127.0.0.1
+           → 设备 443 nc → 127.0.0.1:8444
+           → adb reverse 8444 → 主机 127.0.0.1:4443 mitmdump reverse
+           → Python 后端 8443
 ```
 
-- **Python 后端**：`backend/`，FastAPI + Uvicorn + SQLite，默认监听 `127.0.0.1:8443`。
-- **桥接层**：`bridge/local_redirect.py`，只接管 SDK 启动阶段的 Hypergryph 域名请求，其余流量按原样放行。
+- **Python 后端**：`backend/`，FastAPI + Uvicorn + SQLite，生产监听 `0.0.0.0:8443`。
+- **TLS 反向层**：mitmdump `--mode reverse`，监听 `127.0.0.1:4443`，把设备 8444 的 HTTPS 请求转给 Python 8443。
+- **设备侧**：hosts 把 Hypergryph SDK 域名指向本机，443 由 `nc` 转发到 8444；系统 HTTP 代理保持关闭。
+- **资源**：`network_config.hu` 直接指向官方 CDN，缺失资源 302 回源，不再经过本机中转。
 - **Web 管理后台**：同端口 `/admin`，账号 `sdars`，密码 `123456`（可用环境变量覆盖）。
 
 ## 已实现能力
@@ -43,7 +47,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200
 - 客户端侧：登录链路已走到 `syncData`，并曾进入游戏主界面 / 签到页 / 干员页
 
-> 客户端 U8/HG SDK 在伪造 Token 下可能弹出“同步身份信息失败（错误号 200）”。这是客户端的 SDK 身份校验提示，不影响本机后端的登录与 `syncData`；重试 / 重新唤醒后可继续进入游戏。详细现象与排查见 `docs/验证记录.md`。
+> 2026-11-22 修复：`/account/syncData` 现在同时刷新 `status.lastOnlineTs` 和 `status.lastRefreshTs`。此前只刷新前者，客户端会用旧的刷新时间做身份同步校验并弹出“同步身份信息失败 / 错误号 200”。修复后真实客户端登录直接进入签到页，未再弹窗。
 
 ## 快速开始
 
@@ -62,7 +66,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 
 ```bash
 cd backend
-./start.sh          # 等价于 ARK_PORT=8443 /root/Knight/.venv/bin/python run.py
+ARK_HOST=0.0.0.0 ARK_PORT=8443 ./start.sh
 ```
 
 首次启动会自动创建 `backend/data/arknights.sqlite3`。
@@ -83,20 +87,23 @@ ADB_SERIAL=<设备序列号> ./scripts/connect_device.sh
 
 脚本会建立：
 
-- `adb reverse tcp:8080 tcp:8080`（mitmproxy）
 - `adb reverse tcp:8443 tcp:8443`（Python 后端）
-- 设备全局代理 `127.0.0.1:8080`
+- `adb reverse tcp:8444 tcp:4443`（SDK HTTPS 反向）
+- 设备 hosts：Hypergryph SDK 域名 → `127.0.0.1`
+- 设备 443 → `nc` → 8444
+- 设备系统代理 `:0`（关闭）
 
-> `adb reverse` 在设备重启或 adb 重连后会丢失；如果客户端报“资源载入异常 1103”或“获取网络配置失败”，先执行 `adb reverse --list` 检查并重新运行连接脚本。
+> `adb reverse` 在设备重启或 adb 重连后会丢失；如果客户端报“资源载入异常 1103”或“获取网络配置失败”，运行 `scripts/watchdog.sh` 或 systemd 的 `ark-watchdog` 会自动恢复。
 
-### 5. 启动 mitm 桥接
+### 5. 启动 TLS 反向层
 
 ```bash
 cd bridge
 nohup setsid /root/Knight/.venv/bin/mitmdump \
-  --listen-host 127.0.0.1 --listen-port 8080 \
-  -s local_redirect.py -w flows/bridge-$(date +%Y%m%d-%H%M%S).mitm \
-  > bridge.log 2>&1 < /dev/null &
+  --mode reverse:http://127.0.0.1:8443 \
+  --listen-host 127.0.0.1 --listen-port 4443 \
+  -w flows/reverse-$(date +%Y%m%d-%H%M%S).mitm \
+  > reverse.log 2>&1 < /dev/null &
 ```
 
 ### 6. Web 管理后台
@@ -113,6 +120,15 @@ ADB_SERIAL=<设备序列号> ./scripts/healthcheck.sh
 ADB_SERIAL=<设备序列号> ./scripts/stop_all.sh
 ```
 
+推荐直接安装 systemd 守护（backend + TLS reverse + watchdog）：
+
+```bash
+./scripts/install_services.sh
+systemctl status ark-backend ark-mitm ark-watchdog
+```
+
+`ark-watchdog` 每 15 秒检查 ADB、`adb reverse`、设备 hosts、443→8444 转发、系统代理、后端和 TLS 反向层；任一环节掉线会自动恢复，专门消除 1103。
+
 ## 目录
 
 | 路径 | 用途 |
@@ -121,7 +137,8 @@ ADB_SERIAL=<设备序列号> ./scripts/stop_all.sh
 | `backend/data/` | SQLite 数据库与玩家模板（数据库不提交） |
 | `backend/fixtures/` | 协议响应模板（商品列表、配置、战斗） |
 | `bridge/` | mitmproxy 桥接脚本 |
-| `scripts/` | 账号注入、设备连接、健康检查、停止清理 |
+| `deploy/` | systemd unit（backend / mitm / watchdog） |
+| `scripts/` | 账号注入、设备连接、watchdog、健康检查、停止清理 |
 | `docs/` | 架构、协议、部署、验证记录 |
 | `reference/` | 仅作协议参考的上游资料（不提交、不运行） |
 | `server/` | 旧 Java 运行时（legacy，不参与当前部署） |
