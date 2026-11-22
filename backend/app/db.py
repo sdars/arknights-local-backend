@@ -79,6 +79,7 @@ def init_db():
                 paid_at INTEGER,
                 granted INTEGER NOT NULL DEFAULT 0,
                 granted_at INTEGER,
+                granted_items_json TEXT,
                 raw_json TEXT
             );
             CREATE TABLE IF NOT EXISTS battle_sessions (
@@ -130,6 +131,8 @@ def init_db():
             conn.execute("ALTER TABLE orders ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
         if "granted_at" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN granted_at INTEGER")
+        if "granted_items_json" not in order_columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN granted_items_json TEXT")
         row = conn.execute("SELECT id FROM admin_users WHERE username=?", (ADMIN_USER,)).fetchone()
         if not row:
             conn.execute(

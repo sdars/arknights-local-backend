@@ -265,3 +265,59 @@ def test_confirm_order_applies_and_persists_rewards(client, login, test_account)
     assert duplicate["result"] == 0
     duplicate_user = _account_user(test_account["uid"])
     assert duplicate_user["status"]["gold"] == after["status"]["gold"]
+
+
+def test_cash_order_grants_first_purchase_and_repeat_originium(client, login, test_account):
+    before = _account_user(test_account["uid"])
+    before_diamond = int(before["status"].get("androidDiamond", 0) or 0)
+
+    first = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6936, "goodId": "CS_1_r7"},
+        timeout=15,
+    ).json()
+    first_confirm = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": first["orderId"]},
+        timeout=15,
+    ).json()
+    assert first_confirm["result"] == 0
+    assert first_confirm["receiveItems"]["items"] == [
+        {"id": "4002", "type": "DIAMOND", "count": 3}
+    ]
+    assert first_confirm["playerDataDelta"]["modified"]["status"]["androidDiamond"] == before_diamond + 3
+    assert _account_user(test_account["uid"])["status"]["androidDiamond"] == before_diamond + 3
+
+    duplicate = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": first["orderId"]},
+        timeout=15,
+    ).json()
+    assert duplicate["receiveItems"]["items"] == []
+    assert _account_user(test_account["uid"])["status"]["androidDiamond"] == before_diamond + 3
+
+    second = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6936, "goodId": "CS_1_r7"},
+        timeout=15,
+    ).json()
+    second_confirm = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": second["orderId"]},
+        timeout=15,
+    ).json()
+    assert second_confirm["receiveItems"]["items"] == [
+        {"id": "4002", "type": "DIAMOND", "count": 1}
+    ]
+    assert _account_user(test_account["uid"])["status"]["androidDiamond"] == before_diamond + 4
+
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT granted_items_json FROM orders WHERE order_id=?", (first["orderId"],)
+        ).fetchone()
+    assert json.loads(row[0]) == [{"id": "4002", "type": "DIAMOND", "count": 3}]

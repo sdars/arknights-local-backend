@@ -16,6 +16,7 @@ _lock = threading.Lock()
 _confirm_lock = threading.Lock()
 _products = None
 _shop_goods = None
+_cash_goods = None
 
 
 def products():
@@ -63,8 +64,79 @@ def shop_goods():
         return _shop_goods
 
 
+def cash_goods():
+    global _cash_goods
+    with _lock:
+        if _cash_goods is None:
+            payload = None
+            path = SHOP_DIR / "CashGoodList.json"
+            if path.exists():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    payload = None
+            entries = payload.get("goodList") if isinstance(payload, dict) else payload
+            found = {}
+            for entry in entries or []:
+                if isinstance(entry, dict) and entry.get("goodId"):
+                    found[str(entry["goodId"])] = entry
+            _cash_goods = found
+        return _cash_goods
+
+
+def is_cash_good(good_id):
+    return str(good_id or "") in cash_goods()
+
+
+def cash_good_item(good_id, first_purchase=False):
+    entry = cash_goods().get(str(good_id or ""))
+    if not entry:
+        return None
+    if first_purchase:
+        amount = int(entry.get("doubleCount") or 0)
+    else:
+        amount = int(entry.get("diamondNum") or 0) + int(entry.get("plusNum") or 0)
+    if amount <= 0:
+        amount = int(entry.get("diamondNum") or 0)
+    if amount <= 0:
+        return None
+    return {"id": "4002", "type": "DIAMOND", "count": amount}
+
+
 def good_items(good_id):
+    if is_cash_good(good_id):
+        item = cash_good_item(good_id, first_purchase=False)
+        return [item] if item else []
     return list(shop_goods().get(str(good_id or ""), []))
+
+
+def _first_cash_purchase(conn, order):
+    row = conn.execute(
+        """SELECT COUNT(*) AS c FROM orders
+           WHERE account_id=? AND good_id=? AND status=1
+             AND (created_at < ? OR (created_at = ? AND order_id < ?))""",
+        (
+            order["account_id"],
+            order["good_id"],
+            order["created_at"],
+            order["created_at"],
+            order["order_id"],
+        ),
+    ).fetchone()
+    return int(row["c"] or 0) == 0
+
+
+def order_items(order, conn=None):
+    good_id = str(order.get("good_id") or "")
+    if not is_cash_good(good_id):
+        return good_items(good_id)
+    if conn is None:
+        with connect() as local_conn:
+            first = _first_cash_purchase(local_conn, order)
+    else:
+        first = _first_cash_purchase(conn, order)
+    item = cash_good_item(good_id, first_purchase=first)
+    return [item] if item else []
 
 
 def _extension(order):
@@ -308,9 +380,14 @@ def confirm_order(account, order_id):
             ).fetchone()
             if not account_row:
                 return {"result": 2, "error": "account not found"}
-            items = good_items(order["good_id"])
+            items = order_items(order, conn=conn)
             delta = empty_delta()
-            if not int(order.get("granted", 0) or 0):
+            applied = False
+            granted = int(order.get("granted", 0) or 0)
+            has_ledger = bool(order.get("granted_items_json"))
+            repair_cash = granted and not has_ledger and is_cash_good(order["good_id"]) and bool(items)
+            if not granted or repair_cash:
+                applied = True
                 user = json.loads(account_row["user_json"])
                 _, delta = apply_items(user, items, source="shop")
                 conn.execute(
@@ -321,23 +398,41 @@ def confirm_order(account, order_id):
                     ),
                 )
                 conn.execute(
-                    "UPDATE orders SET status=1,paid_at=COALESCE(paid_at,?),granted=1,granted_at=? WHERE order_id=?",
-                    (now_ts(), now_ts(), order_id),
+                    """UPDATE orders
+                       SET status=1, paid_at=COALESCE(paid_at,?), granted=1,
+                           granted_at=COALESCE(granted_at,?), granted_items_json=?
+                       WHERE order_id=?""",
+                    (
+                        now_ts(),
+                        now_ts(),
+                        json.dumps(items, ensure_ascii=False, separators=(",", ":")),
+                        order_id,
+                    ),
+                )
+            elif not has_ledger:
+                conn.execute(
+                    "UPDATE orders SET granted_items_json=? WHERE order_id=?",
+                    (json.dumps(items, ensure_ascii=False, separators=(",", ":")), order_id),
                 )
             return {
                 "result": 0,
                 "goodId": order["good_id"],
-                "receiveItems": {"items": items, "checkInItems": []},
+                "receiveItems": {"items": items if applied else [], "checkInItems": []},
                 "orderIdList": [order_id],
                 "playerDataDelta": delta,
             }
 
 
 def backfill_paid_order_grants(limit=1000):
-    """Deliver paid orders recorded before reward persistence was added."""
+    """Deliver paid orders, including legacy cash orders that were marked granted without items."""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT order_id,account_id FROM orders WHERE status=1 AND granted=0 ORDER BY created_at LIMIT ?",
+            """SELECT order_id,account_id FROM orders
+               WHERE status=1 AND (
+                   granted=0 OR
+                   (granted=1 AND granted_items_json IS NULL AND substr(good_id,1,3)='CS_')
+               )
+               ORDER BY created_at LIMIT ?""",
             (int(limit),),
         ).fetchall()
     repaired = 0
