@@ -202,6 +202,27 @@ async def app_product_wechat(request: Request):
     return payments.sdk_bill(account, "wechat")
 
 
+@router.post("/u8/pay/confirmOrderState")
+async def confirm_order_state(request: Request):
+    body = await request.json()
+    order = None
+    order_id = str(body.get("orderId") or body.get("outTradeNo") or "")
+    if order_id:
+        order = payments.order_by_id(order_id)
+    if not order:
+        account = account_by_token(str(body.get("token", "")))
+        if account:
+            order = payments.latest_order(account)
+    if order and order["status"]:
+        return {"status": 4, "message": "SUCCEED", "payState": 3, "result": 0}
+    return {"status": 1, "message": "PENDING", "payState": 1, "result": 0}
+
+
+@router.post("/pay/confirmOrderState")
+async def confirm_order_state_legacy(request: Request):
+    return await confirm_order_state(request)
+
+
 @router.get("/api/gate/meta/Android")
 async def gate_meta():
     return {"preAnnounceId": "528", "actived": True, "preAnnounceType": 2}

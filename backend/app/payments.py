@@ -10,8 +10,10 @@ from .db import connect, now_ts
 
 
 PRODUCT_PATH = BASE_DIR / "fixtures" / "product_list.json"
+SHOP_DIR = BASE_DIR / "fixtures" / "shop"
 _lock = threading.Lock()
 _products = None
+_shop_goods = None
 
 
 def products():
@@ -32,6 +34,35 @@ def find_product(store_id=None, good_id=None):
             if item.get("product_id") == good_id or item.get("appstore_id") == good_id:
                 return item
     return products()[0] if products() else None
+
+
+def shop_goods():
+    global _shop_goods
+    with _lock:
+        if _shop_goods is None:
+            found = {}
+            if SHOP_DIR.exists():
+                for path in SHOP_DIR.glob("*.json"):
+                    try:
+                        payload = json.loads(path.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    stack = [payload]
+                    while stack:
+                        node = stack.pop()
+                        if isinstance(node, dict):
+                            good_id = node.get("goodId")
+                            if good_id and isinstance(node.get("items"), list):
+                                found.setdefault(str(good_id), node["items"])
+                            stack.extend(node.values())
+                        elif isinstance(node, list):
+                            stack.extend(node)
+            _shop_goods = found
+        return _shop_goods
+
+
+def good_items(good_id):
+    return list(shop_goods().get(str(good_id or ""), []))
 
 
 def _extension(order):
@@ -268,10 +299,11 @@ def confirm_order(account, order_id):
         return {"result": 2, "error": "order not found"}
     with connect() as conn:
         conn.execute("UPDATE orders SET status=1,paid_at=? WHERE order_id=?", (now_ts(), order_id))
+    items = good_items(order["good_id"])
     return {
         "result": 0,
         "goodId": order["good_id"],
-        "receiveItems": {"items": []},
+        "receiveItems": {"items": items, "checkInItems": []},
         "orderIdList": [order_id],
         "playerDataDelta": {"deleted": {}, "modified": {}},
     }

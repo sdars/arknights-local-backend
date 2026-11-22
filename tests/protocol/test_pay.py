@@ -153,3 +153,63 @@ def test_hgsdk_wechat_bill_shape(client, login, test_account):
     body = bill.json()
     assert body["status"] == 0
     assert body["requestObj"]["prepayid"] == created["orderId"]
+
+
+def test_check_order_v2_returns_sdk_status(client, login):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6818, "goodId": "GP_Once_411"},
+        timeout=15,
+    ).json()
+    checked = client.post(
+        f"{client.base_url}/pay/order/v2/check/alipay",
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    )
+    assert checked.status_code == 200, checked.text
+    body = checked.json()
+    assert body["status"] == 0
+    assert body["data"]["orderId"] == created["orderId"]
+
+
+def test_u8_confirm_order_state_reports_succeed(client, login, test_account):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6818, "goodId": "GP_Once_411"},
+        timeout=15,
+    ).json()
+    client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    )
+    state = client.post(
+        f"{client.base_url}/u8/pay/confirmOrderState",
+        json={"token": test_account["token"], "orderId": created["orderId"]},
+        timeout=15,
+    )
+    assert state.status_code == 200, state.text
+    body = state.json()
+    assert body["status"] == 4
+    assert body["payState"] == 3
+
+
+def test_confirm_order_returns_shop_good_items(client, login):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6818, "goodId": "GP_Once_411"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    items = confirmed["receiveItems"]["items"]
+    assert any(item["id"] == "char_1035_wisdel@game#9" for item in items)
+    assert any(item["type"] == "PLAYER_AVATAR" for item in items)

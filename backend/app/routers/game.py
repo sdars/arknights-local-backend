@@ -209,6 +209,21 @@ async def confirm_order_wechat(request: Request):
     return payments.confirm_alipay(account, order_id, "", int(body.get("status", 0) or 0) == 0)
 
 
+@router.post("/pay/order/v2/check/{payment}")
+async def check_order_v2(payment: str, request: Request):
+    body = await request.json()
+    order_id = str(body.get("orderId", ""))
+    order = payments.order_by_id(order_id)
+    if not order:
+        return {"status": 1, "msg": "order not found", "type": "A"}
+    return {
+        "status": 0,
+        "msg": "OK",
+        "type": "A",
+        "data": {"orderId": order_id, "payment": payment, "paid": bool(order["status"])},
+    }
+
+
 @router.get("/pay/success", response_class=HTMLResponse)
 async def pay_success(orderId: str = ""):
     if orderId:

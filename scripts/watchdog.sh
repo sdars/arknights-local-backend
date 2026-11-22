@@ -87,6 +87,27 @@ ensure_https_forward() {
   fi
 }
 
+ensure_pay_routes() {
+  local pkg="com.hypergryph.arknights"
+  local uid
+  uid=$(timeout 10 adb -s "$ADB_SERIAL" shell "dumpsys package $pkg | grep -m1 'userId='" 2>/dev/null | tr -dc '0-9' || true)
+  if [[ -z "$uid" ]]; then
+    log "WARN: could not resolve $pkg uid for payment routes"
+    return 0
+  fi
+  # Keep Hypergryph SDK traffic and Alipay page-pay on the local mitm path.
+  # Hosts alone is not enough: the WebView and Java SDK use their own DNS cache.
+  local nets=(110.75.170.0/24 110.75.231.202/32 110.75.236.202/32 110.75.244.202/32 110.76.18.202/32)
+  local script=""
+  local net
+  for net in "${nets[@]}"; do
+    script+="iptables -t nat -C OUTPUT -d ${net} -m owner --uid-owner ${uid} -p tcp --dport 443 -j DNAT --to-destination 127.0.0.1:${DEVICE_SDK_PORT} 2>/dev/null || iptables -t nat -I OUTPUT -d ${net} -m owner --uid-owner ${uid} -p tcp --dport 443 -j DNAT --to-destination 127.0.0.1:${DEVICE_SDK_PORT}; "
+  done
+  if ! timeout 20 adb -s "$ADB_SERIAL" shell "su -M -c '$script'" >/dev/null 2>&1; then
+    log "WARN: could not ensure payment DNAT routes"
+  fi
+}
+
 ensure_backend() {
   if curl -sf -m 3 "http://127.0.0.1:${SERVER_HTTP_PORT}/healthz" >/dev/null 2>&1; then
     return 0
@@ -151,6 +172,7 @@ check_once() {
   ensure_proxy_off
   ensure_hosts
   ensure_https_forward
+  ensure_pay_routes
   ensure_backend || return 1
   ensure_mitm || return 1
   return 0

@@ -59,6 +59,9 @@ PROTOCOL_ENDPOINTS = [
     {"stage": "支付", "method": "POST", "path": "/pay/createOrderAlipay", "test": "test_hgsdk_alipay_page_pay_and_success_callback", "desc": "支付宝页支付"},
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrderAlipay", "test": "test_hgsdk_alipay_confirm_marks_paid", "desc": "支付宝回调"},
     {"stage": "支付", "method": "POST", "path": "/pay/createOrderWechat", "test": "test_hgsdk_wechat_bill_shape", "desc": "微信支付单"},
+    {"stage": "支付", "method": "POST", "path": "/pay/order/v2/check/alipay", "test": "test_check_order_v2_returns_sdk_status", "desc": "支付渠道校验"},
+    {"stage": "支付", "method": "POST", "path": "/u8/pay/confirmOrderState", "test": "test_u8_confirm_order_state_reports_succeed", "desc": "订单状态确认"},
+    {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder", "test": "test_confirm_order_returns_shop_good_items", "desc": "确认领取与物品返回"},
     {"stage": "战斗", "method": "POST", "path": "/quest/battleStart", "test": "test_battle_start", "desc": "开始战斗"},
     {"stage": "战斗", "method": "POST", "path": "/quest/battleFinish", "test": "test_battle_finish", "desc": "结束战斗"},
     {"stage": "后台", "method": "GET", "path": "/admin/login", "test": "test_admin_login_page", "desc": "管理后台登录页"},
@@ -278,7 +281,7 @@ def _coverage(report):
     return {
         "stages": stages,
         "shop_endpoints": 13,
-        "pay_endpoints": 7,
+        "pay_endpoints": 10,
         "alipay_mock": True,
         "tests": report["tests"] if report else 0,
         "tests_passed": report["passed"] if report else 0,
