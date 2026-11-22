@@ -1,6 +1,7 @@
 import http.client as http_client
 import json
 import os
+from urllib.parse import quote
 
 from mitmproxy import http as mhttp
 
@@ -39,6 +40,18 @@ def sdk_wrap(obj):
 def request(flow: mhttp.HTTPFlow) -> None:
     host = flow.request.pretty_host
     path = flow.request.path
+    sni = getattr(flow.client_conn, "sni", "") or ""
+
+    if (host == "openapi.alipay.com" or sni == "openapi.alipay.com") and path.startswith("/gateway.do"):
+        order_id = flow.request.query.get("out_trade_no", "")
+        target = f"http://127.0.0.1:8443/pay/success?orderId={quote(order_id)}"
+        flow.response = mhttp.Response.make(
+            302,
+            b"",
+            {"Location": target, "Content-Type": "text/plain; charset=utf-8"},
+        )
+        print(f"MOCK alipay gateway -> {target}")
+        return
 
     if host == "as.hypergryph.com" and path.startswith("/user/info/v1/basic"):
         status, body = backend("GET", path)

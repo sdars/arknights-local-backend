@@ -14,6 +14,21 @@
   <div class="card"><span class="muted">静态协议索引</span><strong class="small">{{ status.catalog.routes }} 路由</strong></div>
 </section>
 
+<section class="panel">
+  <div class="panel-head"><h2>本轮协议覆盖</h2><span class="muted">商店 / 支付 / 主线解锁</span></div>
+  <div class="policy-grid">
+    <div><strong>{{ status.coverage.stages }}</strong><span>玩家模板已写入的主线/活动 stage 记录，解锁采购中心与章节入口</span></div>
+    <div><strong>{{ status.coverage.shop_endpoints }}</strong><span>商店列表端点，覆盖现金、组合包、时装、家具与购买状态</span></div>
+    <div><strong>{{ status.coverage.pay_endpoints }}</strong><span>支付端点，含游戏订单、SDK app_product、支付宝/微信 bill 与回调</span></div>
+    <div><strong>{{ status.coverage.tests_passed }}/{{ status.coverage.tests }}</strong><span>无头协议测试通过数（不依赖截图）</span></div>
+  </div>
+  <p class="muted policy-note">
+    支付宝链路已切到本地闭环：<span class="mono">openapi.alipay.com</span> 由设备 hosts + 443→8444 转发进入 mitm，
+    返回 302 到 <span class="mono">/pay/success?orderId=...</span>，后端立即把订单置为已支付，客户端随后读取
+    <span class="mono">/pay/order/v1/state</span> 得到 <span class="mono">status=0</span>。不依赖真实支付宝商户号。
+  </p>
+</section>
+
 <section class="panel accent-panel">
   <div class="panel-head"><h2>执行约定</h2><span class="muted mono">{{ status.generated_at }}</span></div>
   <div class="policy-grid">

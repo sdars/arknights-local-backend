@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ..config import APP_CODE, CLIENT_VERSION, RES_VERSION
 from ..services import account_by_phone, account_by_token, create_account
+from .. import payments
 
 router = APIRouter()
 
@@ -172,6 +173,33 @@ async def product_list():
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     return {"productList": []}
+
+
+@router.post("/user/pay/order/v2/create/app_product")
+async def app_product(request: Request):
+    body = await request.json()
+    account = account_by_token(body.get("token", ""))
+    if not account:
+        return {"status": 1, "msg": "Invalid Token", "type": "A"}
+    return payments.sdk_app_product(account)
+
+
+@router.post("/user/pay/order/v2/create/app_product/alipay")
+async def app_product_alipay(request: Request):
+    body = await request.json()
+    account = account_by_token(body.get("token", ""))
+    if not account:
+        return {"status": 1, "msg": "Invalid Token", "type": "A"}
+    return payments.sdk_bill(account, "alipay")
+
+
+@router.post("/user/pay/order/v2/create/app_product/wechat")
+async def app_product_wechat(request: Request):
+    body = await request.json()
+    account = account_by_token(body.get("token", ""))
+    if not account:
+        return {"status": 1, "msg": "Invalid Token", "type": "A"}
+    return payments.sdk_bill(account, "wechat")
 
 
 @router.get("/api/gate/meta/Android")

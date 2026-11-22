@@ -65,6 +65,20 @@ def init_db():
                 ip TEXT,
                 ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                uid INTEGER NOT NULL,
+                token TEXT NOT NULL,
+                store_id INTEGER,
+                good_id TEXT,
+                product_name TEXT,
+                amount INTEGER NOT NULL DEFAULT 0,
+                status INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                paid_at INTEGER,
+                raw_json TEXT
+            );
             """
         )
         row = conn.execute("SELECT id FROM admin_users WHERE username=?", (ADMIN_USER,)).fetchone()

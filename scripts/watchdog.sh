@@ -71,8 +71,10 @@ ensure_proxy_off() {
 }
 
 ensure_hosts() {
-  local hosts=(as.hypergryph.com game-config.hypergryph.com ak-conf.hypergryph.com launcher.hypergryph.com ak-webview.hypergryph.com)
-  local script="for h in ${hosts[*]}; do grep -q \"^127\\.0\\.0\\.1 \$h\$\" /system/etc/hosts || echo \"127.0.0.1 \$h\" >> /system/etc/hosts; done"
+  local hosts=(openapi.alipay.com as.hypergryph.com game-config.hypergryph.com ak-conf.hypergryph.com launcher.hypergryph.com ak-webview.hypergryph.com)
+  # /system is normally read-only. Keep a writable copy and bind-mount it over
+  # /system/etc/hosts so the mapping survives package restarts and watchdogs.
+  local script="cp /system/etc/hosts /data/local/tmp/hosts.ark 2>/dev/null || true; for h in ${hosts[*]}; do grep -q \"^127\\.0\\.0\\.1 \$h\$\" /data/local/tmp/hosts.ark || echo \"127.0.0.1 \$h\" >> /data/local/tmp/hosts.ark; done; mount --bind /data/local/tmp/hosts.ark /system/etc/hosts 2>/dev/null || true; grep -q 'openapi.alipay.com' /system/etc/hosts"
   if ! timeout 15 adb -s "$ADB_SERIAL" shell "su -M -c '$script'" >/dev/null 2>&1; then
     log "WARN: could not ensure device hosts mapping (root/mount may be unavailable)"
   fi

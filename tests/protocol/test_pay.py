@@ -1,0 +1,155 @@
+import json
+from urllib.parse import unquote
+
+
+def test_create_order_returns_sdk_extension(client, login):
+    response = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        timeout=15,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"] == 0
+    assert body["orderId"]
+    extension = json.loads(body["extension"])
+    assert extension["amount"] == 4500
+    assert extension["outOrderId"] == body["orderId"]
+    assert extension["extension"]["appStoreProductId"] == "GP_Once_385"
+
+
+def test_sdk_app_product_and_state(client, login, test_account):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        timeout=15,
+    ).json()
+    sdk = client.post(
+        f"{client.base_url}/user/pay/order/v2/create/app_product",
+        json={
+            "token": test_account["token"],
+            "appCode": "7318def77669979d",
+            "signParams": "null",
+            "platform": 1,
+            "source": 0,
+        },
+        timeout=15,
+    )
+    assert sdk.status_code == 200, sdk.text
+    sdk_body = sdk.json()
+    assert sdk_body["status"] == 0
+    assert sdk_body["data"]["orderId"] == created["orderId"]
+    assert len(sdk_body["data"]["payment"]) == 2
+    state = client.get(
+        f"{client.base_url}/pay/order/v1/state",
+        params={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert state["status"] == 101
+    assert state["data"]["orderId"] == created["orderId"]
+
+
+def test_confirm_order_marks_paid(client, login):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["result"] == 0
+    state = client.get(
+        f"{client.base_url}/pay/order/v1/state",
+        params={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert state["status"] == 0
+
+
+def test_hgsdk_alipay_page_pay_and_success_callback(client, login, test_account):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        timeout=15,
+    ).json()
+    order_id = created["orderId"]
+    bill = client.post(
+        f"{client.base_url}/pay/createOrderAlipay",
+        json={
+            "token": test_account["token"],
+            "orderId": order_id,
+            "extra": {"alipayAppId": "local", "alipayMethod": 2},
+        },
+        timeout=15,
+    )
+    assert bill.status_code == 200, bill.text
+    body = bill.json()
+    assert body["pagePay"] is True
+    assert f"out_trade_no={order_id}" in body["qs"]
+    assert "/pay/success" in unquote(body["qs"])
+
+    success = client.get(
+        f"{client.base_url}/pay/success", params={"orderId": order_id}, timeout=15
+    )
+    assert success.status_code == 200, success.text
+    assert "支付成功" in success.text
+    state = client.get(
+        f"{client.base_url}/pay/order/v1/state",
+        params={"orderId": order_id},
+        timeout=15,
+    ).json()
+    assert state["status"] == 0
+
+
+def test_hgsdk_alipay_confirm_marks_paid(client, login, test_account):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5398, "goodId": "GP_Once_384"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrderAlipay",
+        json={
+            "token": test_account["token"],
+            "orderId": created["orderId"],
+            "result": "local-confirmed",
+            "status": 0,
+        },
+        timeout=15,
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == 0
+    state = client.get(
+        f"{client.base_url}/pay/order/v1/state",
+        params={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert state["status"] == 0
+
+
+def test_hgsdk_wechat_bill_shape(client, login, test_account):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        timeout=15,
+    ).json()
+    bill = client.post(
+        f"{client.base_url}/pay/createOrderWechat",
+        json={"token": test_account["token"], "orderId": created["orderId"]},
+        timeout=15,
+    )
+    assert bill.status_code == 200, bill.text
+    body = bill.json()
+    assert body["status"] == 0
+    assert body["requestObj"]["prepayid"] == created["orderId"]

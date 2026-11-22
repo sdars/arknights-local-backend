@@ -31,7 +31,8 @@ def test_sync_status(client, login):
     body = client.post(
         f"{client.base_url}/account/syncStatus", headers=login["headers"], json={}, timeout=10
     ).json()
-    assert body["result"] == 0
+    assert isinstance(body["result"], dict)
+    assert isinstance(body["ts"], int)
     assert body["pushMessage"] == []
 
 
