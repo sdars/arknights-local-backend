@@ -31,7 +31,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 游戏登录：`/account/login`、`/account/syncData`、`/account/syncStatus`、`/account/syncPushMessage`
 - 战斗：`/quest/battleStart`、`/quest/battleFinish`
 - 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店
-- 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号
+- 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号
 - 配置与资源：`network_config`、`remote_config`、版本接口、`/assetbundle/official/...`（302 回源到官方 CDN）
 - Web UI：仪表盘、账号管理（新建 / 编辑 / 封禁 / 重置 Token / 删除）、请求日志、服务设置
 
