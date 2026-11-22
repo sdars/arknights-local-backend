@@ -15,13 +15,16 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>本轮协议覆盖</h2><span class="muted">商店 / 支付 / 奖励落库</span></div>
+  <div class="panel-head"><h2>本轮协议覆盖</h2><span class="muted">用户控制台 / 邮件 / 更新资源 / 奖励落库</span></div>
   <div class="policy-grid">
     <div><strong>{{ status.coverage.stages }}</strong><span>玩家模板已写入的主线/活动 stage 记录，解锁采购中心与章节入口</span></div>
     <div><strong>{{ status.coverage.shop_endpoints }}</strong><span>商店列表端点，覆盖现金、组合包、时装、家具与购买状态</span></div>
     <div><strong>{{ status.coverage.pay_endpoints }}</strong><span>支付端点，含游戏订单、SDK app_product、支付宝/微信 bill 与回调</span></div>
     <div><strong>{{ status.coverage.reward_endpoints }}</strong><span>奖励端点：购买、任务领取/批量/自动/任务组/点数兑换、签到与战斗结算</span></div>
     <div><strong>{{ status.coverage.persistence_checks }}</strong><span>落库检查：订单幂等、任务状态、签到防重、战斗关卡与首通奖励</span></div>
+    <div><strong>{{ status.coverage.mail_endpoints }}</strong><span>邮件端点：元数据、正文、单封/批量领取与已读删除</span></div>
+    <div><strong>{{ status.coverage.account_admin_modules }}</strong><span>用户控制台模块：资料、货币、库存、资产、干员、编队、订单与邮件</span></div>
+    <div><strong>{{ status.coverage.update_controls }}</strong><span>更新控制：客户端/资源版本、登录门禁、启动器强制更新、维护模式与本地资源分发</span></div>
     <div><strong>{{ status.coverage.tests_passed }}/{{ status.coverage.tests }}</strong><span>无头协议测试通过数（不依赖截图）</span></div>
   </div>
   <p class="muted policy-note">

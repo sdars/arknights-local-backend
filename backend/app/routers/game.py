@@ -1,4 +1,3 @@
-import copy
 import json
 import time
 import uuid
@@ -6,11 +5,11 @@ import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ..config import BATTLE_START_TEMPLATE, CLIENT_VERSION, RES_VERSION, SERVER_NAME
+from ..config import BATTLE_START_TEMPLATE
 from ..db import now_ts
 from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response
-from .. import battles, game_data, grants, missions, payments
+from .. import battles, game_data, grants, mail_service, missions, payments, runtime_settings
 
 router = APIRouter()
 
@@ -38,6 +37,13 @@ def auth(request: Request):
     return account_by_token(token)
 
 
+def _as_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @router.post("/account/login")
 async def account_login(request: Request):
     body = await request.json()
@@ -47,11 +53,14 @@ async def account_login(request: Request):
         return {"result": 2, "error": "invalid token"}
     if account["banned"]:
         return {"result": 1, "error": "account banned"}
+    settings = runtime_settings.values()
+    if settings["maintenance"]:
+        return {"result": 3, "error": settings["maintenance_message"]}
     client_version = str(body.get("clientVersion", ""))
     assets_version = str(body.get("assetsVersion", ""))
-    if client_version and client_version != CLIENT_VERSION:
+    if client_version and client_version != settings["client_version"] and settings["force_update"]:
         return {"result": 2, "error": "客户端版本需要更新"}
-    if assets_version and assets_version != RES_VERSION:
+    if assets_version and assets_version != settings["res_version"] and settings["force_resource_update"]:
         return {"result": 4, "error": "资源需要更新"}
     touch_login(account, body.get("deviceId"), request.client.host if request.client else None)
     data = {
@@ -73,10 +82,11 @@ async def sync_data(request: Request):
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
-    status["serverName"] = SERVER_NAME
+    status["serverName"] = runtime_settings.values()["server_name"]
     ts = now_ts()
     status["lastOnlineTs"] = ts
     status["lastRefreshTs"] = ts
+    user.setdefault("pushFlags", {})["hasGifts"] = 1 if mail_service.unread_count(account["uid"]) else 0
     checkin = user.setdefault("checkIn", {})
     last_checkin = int(checkin.get("lastCheckInTs", 0) or 0)
     if not last_checkin or time.strftime("%Y-%m-%d", time.localtime(last_checkin)) != time.strftime("%Y-%m-%d", time.localtime(ts)):
@@ -117,7 +127,7 @@ async def battle_start(request: Request):
     status = modified.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
-    status["serverName"] = SERVER_NAME
+    status["serverName"] = runtime_settings.values()["server_name"]
     stage = body.get("stageId", "guide_01")
     user = player_data(account)
     stages_user = user.setdefault("dungeon", {}).setdefault("stages", {})
@@ -254,6 +264,161 @@ async def user_checkin(request: Request):
         "signInRewards": granted,
         "subscriptionRewards": [],
         "playerDataDelta": delta,
+    }
+
+
+@router.post("/mail/getMetaInfoList")
+async def mail_meta_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    return {"result": mail_service.meta_list(account["uid"])}
+
+
+@router.post("/mail/listMailBox")
+async def mail_list_box(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ids = body.get("mailIdList") or body.get("sysMailIdList") or []
+    return {
+        "mailList": mail_service.list_mailbox(account["uid"], ids),
+        "surveyMailList": [],
+        **empty_delta(),
+    }
+
+
+@router.post("/mail/receiveMail")
+async def mail_receive(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        mail_id = int(body.get("mailId") or 0)
+    except (TypeError, ValueError):
+        mail_id = 0
+    return mail_service.receive_mail(account, mail_id)
+
+
+@router.post("/mail/receiveAllMail")
+async def mail_receive_all(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ids = body.get("mailIdList") or body.get("sysMailIdList") or []
+    return mail_service.receive_all(account, ids)
+
+
+@router.post("/mail/removeAllReceivedMail")
+async def mail_remove_all(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ids = body.get("mailIdList") or body.get("sysMailIdList") or []
+    mail_service.remove_mail(account["uid"], ids, received_only=True)
+    return {"result": 0, **empty_delta()}
+
+
+@router.post("/mailCollection/getList")
+async def mail_collection_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    return {"collections": [], "extra": []}
+
+
+@router.post("/quest/squadFormation")
+async def squad_formation(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    squad_id = str(body.get("squadId") or "0")
+    slots = body.get("slots")
+    if not isinstance(slots, list):
+        slots = []
+    user = player_data(account)
+    chars = user.get("troop", {}).get("chars") or {}
+    normalized = []
+    for slot in slots[:12]:
+        if not isinstance(slot, dict):
+            normalized.append(None)
+            continue
+        inst_id = _as_int(slot.get("charInstId"), -1)
+        if inst_id < 0 or str(inst_id) not in chars:
+            normalized.append(None)
+            continue
+        char = chars.get(str(inst_id)) or {}
+        normalized_slot = {
+            "charInstId": inst_id,
+            "skillIndex": _as_int(
+                slot.get("skillIndex"),
+                _as_int(char.get("defaultSkillIndex"), -1),
+            ),
+            "currentEquip": slot.get("currentEquip", char.get("currentEquip")),
+        }
+        if slot.get("currentTmpl") is not None:
+            normalized_slot["currentTmpl"] = slot.get("currentTmpl")
+        if isinstance(slot.get("tmpl"), (dict, list)):
+            normalized_slot["tmpl"] = slot.get("tmpl")
+        normalized.append(normalized_slot)
+    normalized.extend([None] * (12 - len(normalized)))
+    squads = user.setdefault("troop", {}).setdefault("squads", {})
+    squad = squads.get(squad_id)
+    if not isinstance(squad, dict):
+        squad = {"squadId": squad_id, "name": "", "slots": []}
+        squads[squad_id] = squad
+    squad["squadId"] = squad_id
+    squad["slots"] = normalized
+    save_player(account, user)
+    return {
+        "result": 0,
+        "playerDataDelta": {"deleted": {}, "modified": {"troop": user.get("troop", {})}},
+    }
+
+
+@router.post("/quest/changeSquadName")
+async def change_squad_name(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    squad_id = str(body.get("squadId") or "0")
+    name = str(body.get("name") or "")[:64]
+    user = player_data(account)
+    squads = user.setdefault("troop", {}).setdefault("squads", {})
+    squad = squads.get(squad_id)
+    if not isinstance(squad, dict):
+        squad = {"squadId": squad_id, "slots": [None] * 12}
+        squads[squad_id] = squad
+    squad["squadId"] = squad_id
+    squad["name"] = name
+    save_player(account, user)
+    return {
+        "result": 0,
+        "playerDataDelta": {"deleted": {}, "modified": {"troop": user.get("troop", {})}},
     }
 
 

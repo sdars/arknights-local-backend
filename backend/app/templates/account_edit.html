@@ -1,33 +1,384 @@
 {% extends "base.html" %}
 {% set active = 'accounts' %}
-{% block title %}编辑 {{ account.uid }} · Arknights 本机后端{% endblock %}
+{% block title %}UID {{ account.uid }} · 用户控制台{% endblock %}
+{% macro number_field(name, label, value, minimum=0) %}
+<label>{{ label }}<input type="number" name="{{ name }}" value="{{ value }}" min="{{ minimum }}"></label>
+{% endmacro %}
 {% block content %}
 <header class="page-head">
-  <div><p class="eyebrow">ACCOUNT</p><h1>UID {{ account.uid }}</h1></div>
-  <a class="btn" href="/admin/accounts">返回列表</a>
+  <div>
+    <p class="eyebrow">ACCOUNT CONSOLE</p>
+    <h1>UID {{ account.uid }} · {{ account.nickname }}</h1>
+    <p class="muted mono">{{ account.phone }} · {{ account.token }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/admin/accounts">返回列表</a>
+    <a class="btn" href="/admin/mail?q={{ account.uid }}">邮件中心</a>
+  </div>
 </header>
 
-<section class="panel">
-  <form class="form" method="post" action="/admin/accounts/{{ account.uid }}/update">
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="cards account-cards">
+  <div class="card"><span class="muted">等级</span><strong>{{ status.get('level', 1) }}</strong></div>
+  <div class="card"><span class="muted">龙门币</span><strong class="small">{{ status.get('gold', 0) }}</strong></div>
+  <div class="card"><span class="muted">合成玉 / 源石</span><strong class="small">{{ status.get('androidDiamond', 0) }} / {{ status.get('iosDiamond', 0) }}</strong></div>
+  <div class="card"><span class="muted">干员 / 编队</span><strong>{{ summary.characters }} / {{ summary.squads }}</strong></div>
+  <div class="card"><span class="muted">库存条目</span><strong>{{ summary.inventory }}</strong></div>
+  <div class="card"><span class="muted">未读邮件</span><strong>{{ summary.unread_mails }}</strong></div>
+</section>
+
+<nav class="subnav">
+  <a href="#profile">账号资料</a>
+  <a href="#currency">货币与进度</a>
+  <a href="#inventory">库存</a>
+  <a href="#assets">皮肤 / 头像</a>
+  <a href="#operators">干员</a>
+  <a href="#squads">编队</a>
+  <a href="#mail">邮件</a>
+  <a href="#orders">订单</a>
+  <a href="#advanced">高级操作</a>
+</nav>
+
+<section class="panel" id="profile">
+  <div class="panel-head"><h2>账号资料</h2><span class="muted">修改登录身份与展示信息</span></div>
+  <form class="form-grid" method="post" action="/admin/accounts/{{ account.uid }}/update">
     <label>手机号<input name="phone" value="{{ account.phone }}" required></label>
     <label>昵称<input name="nickname" value="{{ account.nickname }}" required></label>
-    <label>Token<input name="token" value="{{ account.token }}" required></label>
-    <label>状态
+    <label>Token<input class="mono" name="token" value="{{ account.token }}" required></label>
+    <label>登录状态
       <select name="banned">
         <option value="0" {% if not account.banned %}selected{% endif %}>正常</option>
         <option value="1" {% if account.banned %}selected{% endif %}>封禁</option>
       </select>
     </label>
-    <div class="actions"><button class="primary" type="submit">保存</button></div>
+    <div class="actions span-all"><button class="primary" type="submit">保存账号资料</button></div>
   </form>
 </section>
 
-<section class="panel danger-zone">
-  <div class="panel-head"><h2>危险操作</h2></div>
-  <div class="actions">
-    <form method="post" action="/admin/accounts/{{ account.uid }}/reset-token"><button class="btn" type="submit">重置 Token</button></form>
-    <form method="post" action="/admin/accounts/{{ account.uid }}/delete" onsubmit="return confirm('确定删除该账号？')"><button class="danger" type="submit">删除账号</button></form>
+<section class="panel" id="currency">
+  <div class="panel-head"><h2>货币、体力与主线进度</h2><span class="muted">所有数值写入 user_json，重登后仍保留</span></div>
+  <form class="form-grid" method="post" action="/admin/accounts/{{ account.uid }}/status">
+    {{ number_field('level', '等级', status.get('level', 1), 1) }}
+    {{ number_field('exp', '经验', status.get('exp', 0)) }}
+    {{ number_field('gold', '龙门币', status.get('gold', 0)) }}
+    {{ number_field('diamondShard', '合成玉', status.get('diamondShard', 0)) }}
+    {{ number_field('androidDiamond', '安卓源石', status.get('androidDiamond', 0)) }}
+    {{ number_field('iosDiamond', 'iOS 源石', status.get('iosDiamond', 0)) }}
+    {{ number_field('payDiamond', '付费源石', status.get('payDiamond', 0)) }}
+    {{ number_field('freeDiamond', '免费源石', status.get('freeDiamond', 0)) }}
+    {{ number_field('gachaTicket', '寻访凭证', status.get('gachaTicket', 0)) }}
+    {{ number_field('tenGachaTicket', '十连寻访凭证', status.get('tenGachaTicket', 0)) }}
+    {{ number_field('classicGachaTicket', '中坚寻访凭证', status.get('classicGachaTicket', 0)) }}
+    {{ number_field('classicTenGachaTicket', '中坚十连凭证', status.get('classicTenGachaTicket', 0)) }}
+    {{ number_field('recruitLicense', '公开招募许可', status.get('recruitLicense', 0)) }}
+    {{ number_field('instantFinishTicket', '加急许可', status.get('instantFinishTicket', 0)) }}
+    {{ number_field('practiceTicket', '演习券', status.get('practiceTicket', 0)) }}
+    {{ number_field('hggShard', '高级凭证', status.get('hggShard', 0)) }}
+    {{ number_field('lggShard', '采购凭证', status.get('lggShard', 0)) }}
+    {{ number_field('classicShard', '中坚凭证', status.get('classicShard', 0)) }}
+    {{ number_field('socialPoint', '信用', status.get('socialPoint', 0)) }}
+    {{ number_field('ap', '当前理智', status.get('ap', 0)) }}
+    {{ number_field('maxAp', '理智上限', status.get('maxAp', 1), 1) }}
+    {{ number_field('buyApRemainTimes', '源石换理智次数', status.get('buyApRemainTimes', 0)) }}
+    {{ number_field('progress', '进度值', status.get('progress', 0)) }}
+    <label>主线进度<input name="mainStageProgress" value="{{ status.get('mainStageProgress', '') }}" placeholder="main_00-10"></label>
+    <label>助理干员<input name="secretary" value="{{ status.get('secretary', '') }}" list="char-catalog"></label>
+    <label>助理皮肤<input name="secretarySkinId" value="{{ status.get('secretarySkinId', '') }}" list="skin-catalog"></label>
+    <label>头像 ID<input name="avatarId" value="{{ status.get('avatarId', '') }}" list="avatar-catalog"></label>
+    <label>全局语音
+      <select name="globalVoiceLan">
+        {% for value in ['CN_MANDARIN', 'CN_MANDARIN_2', 'JP', 'EN', 'KR'] %}
+        <option value="{{ value }}" {% if status.get('globalVoiceLan') == value %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="span-all">签名<textarea name="resume" rows="2">{{ status.get('resume', '') }}</textarea></label>
+    <div class="actions span-all"><button class="primary" type="submit">保存货币与进度</button></div>
+  </form>
+</section>
+
+<section class="panel" id="inventory">
+  <div class="panel-head"><h2>库存</h2><span class="muted">{{ summary.inventory }} 个条目</span></div>
+  <form class="inline-form inventory-add" method="post" action="/admin/accounts/{{ account.uid }}/inventory">
+    <label>物品 ID<input name="item_id" list="item-catalog" placeholder="4001" required></label>
+    <label>数量<input type="number" name="count" value="1" min="1"></label>
+    <label>方式
+      <select name="mode">
+        <option value="add">追加</option>
+        <option value="set">设为</option>
+      </select>
+    </label>
+    <button class="primary" type="submit">写入库存</button>
+  </form>
+  <p class="muted small-note">物品类型会从 item_table 自动补齐；CHAR、CHAR_SKIN、PLAYER_AVATAR 等特殊资产请使用上方资产发放或下方干员发放。</p>
+  <div class="table-wrap">
+  <table class="table compact-table">
+    <thead><tr><th>ID</th><th>名称</th><th>类型</th><th>数量</th><th>修改</th></tr></thead>
+    <tbody>
+    {% for row in inventory_rows %}
+      <tr>
+        <td class="mono">{{ row.id }}</td>
+        <td>{{ row.name }}</td>
+        <td class="mono">{{ row.type }}</td>
+        <td>{{ row.count }}</td>
+        <td>
+          <form class="row-form" method="post" action="/admin/accounts/{{ account.uid }}/inventory">
+            <input type="hidden" name="item_id" value="{{ row.id }}">
+            <input type="hidden" name="item_type" value="{{ row.type }}">
+            <input type="number" name="count" value="{{ row.count }}" min="0">
+            <button name="mode" value="set" type="submit">设为</button>
+            <button name="mode" value="delete" type="submit" class="danger">删除</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">库存为空。可在上方写入物品。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
   </div>
 </section>
-{% endblock %}
 
+<section class="panel" id="assets">
+  <div class="panel-head"><h2>皮肤、头像与特殊资产</h2><span class="muted">{{ summary.skins }} 皮肤 · {{ summary.avatars }} 头像</span></div>
+  <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/grant">
+    <label>类型
+      <select name="grant_type">
+        <option value="CHAR_SKIN">角色皮肤</option>
+        <option value="PLAYER_AVATAR">玩家头像</option>
+        <option value="HOME_THEME">基建主题</option>
+        <option value="HOME_BACKGROUND">主界面背景</option>
+        <option value="EMOTICON_SET">表情包</option>
+        <option value="FURN">家具</option>
+      </select>
+    </label>
+    <label>资产 ID<input name="grant_id" list="all-assets" placeholder="char_1035_wisdel#9" required></label>
+    <label>数量<input type="number" name="grant_count" value="1" min="1"></label>
+    <button class="primary" type="submit">发放资产</button>
+  </form>
+  <div class="grid-2 asset-lists">
+    <div class="subpanel">
+      <div class="panel-head"><h3>角色皮肤</h3><span class="muted">{{ skins|length }}</span></div>
+      <div class="table-wrap short">
+      <table class="table compact-table">
+        <thead><tr><th>ID</th><th>名称</th><th>干员</th><th></th></tr></thead>
+        <tbody>
+        {% for row in skins %}
+          <tr>
+            <td class="mono">{{ row.id }}</td><td>{{ row.name }}</td><td class="mono">{{ row.charId }}</td>
+            <td><form method="post" action="/admin/accounts/{{ account.uid }}/asset/remove">
+              <input type="hidden" name="kind" value="skin"><input type="hidden" name="asset_id" value="{{ row.id }}">
+              <button class="danger" type="submit">移除</button>
+            </form></td>
+          </tr>
+        {% else %}<tr><td colspan="4" class="muted">暂无皮肤</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <div class="subpanel">
+      <div class="panel-head"><h3>玩家头像</h3><span class="muted">{{ avatars|length }}</span></div>
+      <div class="table-wrap short">
+      <table class="table compact-table">
+        <thead><tr><th>ID</th><th>名称</th><th>类型</th><th></th></tr></thead>
+        <tbody>
+        {% for row in avatars %}
+          <tr>
+            <td class="mono">{{ row.id }}</td><td>{{ row.name }}</td><td>{{ row.type }}</td>
+            <td><form method="post" action="/admin/accounts/{{ account.uid }}/asset/remove">
+              <input type="hidden" name="kind" value="avatar"><input type="hidden" name="asset_id" value="{{ row.id }}">
+              <button class="danger" type="submit">移除</button>
+            </form></td>
+          </tr>
+        {% else %}<tr><td colspan="4" class="muted">暂无头像</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="operators">
+  <div class="panel-head"><h2>干员</h2><span class="muted">{{ summary.characters }} 名</span></div>
+  <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/operator-add">
+    <label>干员 ID<input name="char_id" list="char-catalog" placeholder="char_003_kalts" required></label>
+    <label>数量<input type="number" name="count" value="1" min="1"></label>
+    <button class="primary" type="submit">新增干员</button>
+  </form>
+  <div class="operator-list">
+  {% for row in character_rows %}
+    <article class="subpanel operator-card">
+      <header>
+        <div><strong>{{ row.name }}</strong><span class="mono muted"> #{{ row.instId }} · {{ row.charId }}</span></div>
+        <div class="actions">
+          <span class="pill">Lv.{{ row.level }}</span>
+          <form method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}/delete" onsubmit="return confirm('确定移除该干员？编队中的槽位会清空。')">
+            <button class="danger" type="submit">移除</button>
+          </form>
+        </div>
+      </header>
+      <form class="operator-form" method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}">
+        {{ number_field('level', '等级', row.level, 1) }}
+        {{ number_field('evolvePhase', '精英阶段', row.evolvePhase) }}
+        {{ number_field('potentialRank', '潜能', row.potentialRank) }}
+        {{ number_field('mainSkillLvl', '技能等级', row.mainSkillLvl, 1) }}
+        {{ number_field('favorPoint', '信赖', row.favorPoint) }}
+        <label>皮肤<input name="skin" value="{{ row.skin }}" list="skin-catalog"></label>
+        <label>语音
+          <select name="voiceLan">
+            {% for value in ['CN_MANDARIN', 'JP', 'EN', 'KR'] %}
+            <option value="{{ value }}" {% if row.voiceLan == value %}selected{% endif %}>{{ value }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="actions"><button class="primary" type="submit">保存干员</button></div>
+      </form>
+    </article>
+  {% else %}
+    <p class="muted">暂无干员。</p>
+  {% endfor %}
+  </div>
+</section>
+
+<section class="panel" id="squads">
+  <div class="panel-head"><h2>编队</h2><span class="muted">{{ summary.squads }} 支</span></div>
+  <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/squad-add">
+    <label>新编队名称<input name="name" placeholder="第五编队"></label>
+    <button class="primary" type="submit">新增编队</button>
+  </form>
+  <div class="squad-list">
+  {% for squad in squads %}
+    <article class="subpanel">
+      <div class="panel-head">
+        <h3>编队 {{ squad.id }}</h3>
+        {% if squads|length > 1 %}
+        <form method="post" action="/admin/accounts/{{ account.uid }}/squad/{{ squad.id }}/delete" onsubmit="return confirm('确定删除该编队？')">
+          <button class="danger" type="submit">删除编队</button>
+        </form>
+        {% endif %}
+      </div>
+      <form method="post" action="/admin/accounts/{{ account.uid }}/squad/{{ squad.id }}">
+        <label>名称<input name="name" value="{{ squad.name }}"></label>
+        <div class="slot-grid">
+        {% for slot in squad.slots %}
+          <label>槽位 {{ slot.index + 1 }}
+            <input type="number" name="slot_{{ slot.index }}" value="{{ slot.instId }}" list="operator-inst-catalog" placeholder="{{ slot.name or '空' }}">
+          </label>
+        {% endfor %}
+        </div>
+        <div class="actions"><button class="primary" type="submit">保存编队</button></div>
+      </form>
+    </article>
+  {% else %}<p class="muted">暂无编队。</p>{% endfor %}
+  </div>
+</section>
+
+<section class="panel" id="mail">
+  <div class="panel-head"><h2>邮件</h2><a href="/admin/mail?q={{ account.uid }}">打开邮件中心</a></div>
+  <form class="form-grid" method="post" action="/admin/accounts/{{ account.uid }}/mail/send">
+    <label>模板
+      <select name="template_id">
+        <option value="">不使用模板 / 仅覆盖字段</option>
+        {% for template in mail_templates %}
+        <option value="{{ template.id }}">{{ template.name }} · {{ template.subject }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>发件人<input name="sender" placeholder="保留模板值"></label>
+    <label>标题<input name="subject" placeholder="保留模板值"></label>
+    <label>有效天数<input type="number" name="expire_days" placeholder="模板值"></label>
+    <label class="span-all">正文<textarea name="content" rows="4" placeholder="留空使用模板正文"></textarea></label>
+    <label class="span-all">附件 JSON<textarea class="mono" name="items" rows="3" placeholder='[{"id":"4001","type":"GOLD","count":20000}]'></textarea></label>
+    <div class="actions span-all"><button class="primary" type="submit">发送邮件</button></div>
+  </form>
+  <div class="table-wrap">
+  <table class="table compact-table">
+    <thead><tr><th>Mail ID</th><th>状态</th><th>标题</th><th>附件</th><th>创建时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for mail in mails %}
+      <tr>
+        <td class="mono">{{ mail.mail_id }}</td>
+        <td>{% if mail.state %}<span class="status s2">已领取</span>{% else %}<span class="status s3">未领取</span>{% endif %}</td>
+        <td>{{ mail.subject }}<div class="muted mono">{{ mail.sender }}</div></td>
+        <td class="mono small-text">{% for item in mail['items'] %}{{ item.id }}×{{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
+        <td class="mono">{{ mail.create_at }}</td>
+        <td><form method="post" action="/admin/accounts/{{ account.uid }}/mail/{{ mail.mail_id }}/delete"><button class="danger" type="submit">删除</button></form></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">该账号没有邮件。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="panel" id="orders">
+  <div class="panel-head"><h2>订单与补发</h2><span class="muted">最近 {{ orders|length }} 笔 · 已发放 {{ summary.granted_orders }}</span></div>
+  <div class="table-wrap">
+  <table class="table compact-table">
+    <thead><tr><th>订单号</th><th>商品</th><th>金额</th><th>状态</th><th>已发放</th><th>创建时间</th></tr></thead>
+    <tbody>
+    {% for order in orders %}
+      <tr>
+        <td class="mono">{{ order.order_id }}</td>
+        <td>{{ order.product_name or order.good_id }}</td>
+        <td>{{ order.amount }}</td>
+        <td>{% if order.status == 2 %}<span class="status s2">已支付</span>{% else %}<span class="status s3">{{ order.status }}</span>{% endif %}</td>
+        <td>{% if order.granted %}<span class="status s2">是</span>{% else %}<span class="status s4">否</span>{% endif %}</td>
+        <td class="mono">{{ order.created_at }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">暂无订单。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="panel danger-zone" id="advanced">
+  <div class="panel-head"><h2>高级操作</h2><span class="muted">Token、订阅时间、JSON 导出与账号删除</span></div>
+  <form class="form-grid" method="post" action="/admin/accounts/{{ account.uid }}/status">
+    <label>月卡开始时间戳<input type="number" name="monthlySubscriptionStartTime" value="{{ status.get('monthlySubscriptionStartTime', 0) }}" min="0"></label>
+    <label>月卡结束时间戳<input type="number" name="monthlySubscriptionEndTime" value="{{ status.get('monthlySubscriptionEndTime', 0) }}" min="0"></label>
+    <div class="actions span-all"><button type="submit">保存订阅时间</button></div>
+  </form>
+  <div class="actions">
+    <form method="post" action="/admin/accounts/{{ account.uid }}/reset-token"><button class="btn" type="submit">重置 Token</button></form>
+    <a class="btn" href="/admin/accounts/{{ account.uid }}/user.json">下载 user.json</a>
+    <form method="post" action="/admin/accounts/{{ account.uid }}/delete" onsubmit="return confirm('确定删除该账号及邮件、订单会话？此操作不可撤销。')">
+      <button class="danger" type="submit">删除账号</button>
+    </form>
+  </div>
+</section>
+
+<datalist id="char-catalog">
+{% for item in char_catalog.values()|sort(attribute='name') %}
+  <option value="{{ item.id }}">{{ item.name }} · {{ item.rarity }} · {{ item.profession }}</option>
+{% endfor %}
+</datalist>
+<datalist id="skin-catalog">
+{% for item in skin_catalog.values()|sort(attribute='name') %}
+  <option value="{{ item.id }}">{{ item.name }} · {{ item.charId }}</option>
+{% endfor %}
+</datalist>
+<datalist id="avatar-catalog">
+{% for item in avatar_catalog.values()|sort(attribute='name') %}
+  <option value="{{ item.id }}">{{ item.name }} · {{ item.type }}</option>
+{% endfor %}
+</datalist>
+<datalist id="all-assets">
+{% for item in skin_catalog.values()|sort(attribute='name') %}<option value="{{ item.id }}">皮肤 · {{ item.name }}</option>{% endfor %}
+{% for item in avatar_catalog.values()|sort(attribute='name') %}<option value="{{ item.id }}">头像 · {{ item.name }}</option>{% endfor %}
+</datalist>
+<datalist id="item-catalog">
+{% for item in item_catalog.values()|sort(attribute='name') %}
+  <option value="{{ item.id }}">{{ item.name }} · {{ item.type }}</option>
+{% endfor %}
+</datalist>
+<datalist id="operator-inst-catalog">
+{% for row in character_rows %}
+  <option value="{{ row.instId }}">{{ row.name }} · Lv.{{ row.level }}</option>
+{% endfor %}
+</datalist>
+{% endblock %}

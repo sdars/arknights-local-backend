@@ -68,6 +68,73 @@ def item_pack(pack_id):
     return (table.get("itemPackInfos") or {}).get(str(pack_id or ""))
 
 
+def item_catalog():
+    table = excel("item_table.json") or {}
+    result = {}
+    for item_id, item in (table.get("items") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        result[str(item_id)] = {
+            "id": str(item_id),
+            "name": str(item.get("name") or item_id),
+            "type": str(item.get("itemType") or "MATERIAL"),
+            "rarity": item.get("rarity") or "",
+            "usage": item.get("usage") or "",
+        }
+    return result
+
+
+def character_catalog():
+    result = {}
+    for char_id, char in (excel("character_table.json") or {}).items():
+        if not isinstance(char, dict):
+            continue
+        result[str(char_id)] = {
+            "id": str(char_id),
+            "name": str(char.get("name") or char_id),
+            "rarity": str(char.get("rarity") or ""),
+            "profession": str(char.get("profession") or ""),
+            "appellation": str(char.get("appellation") or ""),
+        }
+    return result
+
+
+def skin_catalog():
+    table = excel("skin_table.json") or {}
+    result = {}
+    for skin_id, skin in (table.get("charSkins") or {}).items():
+        if not isinstance(skin, dict):
+            continue
+        display = skin.get("displaySkin") or {}
+        result[str(skin_id)] = {
+            "id": str(skin_id),
+            "name": str(display.get("skinName") or display.get("modelName") or skin_id),
+            "charId": str(skin.get("charId") or ""),
+            "group": str(display.get("skinGroupName") or ""),
+        }
+    return result
+
+
+def avatar_catalog():
+    table = excel("player_avatar_table.json") or {}
+    result = {}
+    for avatar in table.get("avatarList") or []:
+        if not isinstance(avatar, dict) or not avatar.get("avatarId"):
+            continue
+        avatar_id = str(avatar["avatarId"])
+        result[avatar_id] = {
+            "id": avatar_id,
+            "name": str(avatar.get("avatarItemName") or avatar_id),
+            "type": str(avatar.get("avatarType") or ""),
+        }
+    return result
+
+
+def item_type(item_id):
+    item = item_catalog().get(str(item_id or ""))
+    return item["type"] if item else "MATERIAL"
+
+
 def checkin_group(group_id):
     table = excel("checkin_table.json") or {}
     return (table.get("groups") or {}).get(str(group_id or ""))

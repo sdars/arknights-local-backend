@@ -22,7 +22,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - **Python 后端**：`backend/`，FastAPI + Uvicorn + SQLite，生产监听 `0.0.0.0:8443`。
 - **TLS 反向层**：mitmdump `--mode reverse`，监听 `127.0.0.1:4443`，把设备 8444 的 HTTPS 请求转给 Python 8443。
 - **设备侧**：hosts 把 Hypergryph SDK 域名指向本机，443 由 `nc` 转发到 8444；系统 HTTP 代理保持关闭。
-- **资源**：`network_config.hu` 直接指向官方 CDN，缺失资源 302 回源，不再经过本机中转。
+- **资源**：`network_config.hu` 可在官方 CDN 与本机 `/assetbundle/official` 间切换；本地根目录命中时直接下发，缺失时 302 到独立回源地址，避免自跳转。
 - **Web 管理后台**：同端口 `/admin`，账号 `sdars`，密码 `123456`（可用环境变量覆盖）。
 
 ## 已实现能力
@@ -32,8 +32,9 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 战斗：`/quest/battleStart`、`/quest/battleFinish`
 - 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店
 - 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号
-- 配置与资源：`network_config`、`remote_config`、版本接口、`/assetbundle/official/...`（302 回源到官方 CDN）
-- Web UI：仪表盘、账号管理（新建 / 编辑 / 封禁 / 重置 Token / 删除）、请求日志、服务设置
+- 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
+- 邮件：模板中心、单账号/多 UID/全服发送、有效期与附件、邮件箱、单封/批量领取、防重复发奖、已读删除；`pushFlags.hasGifts` 与邮箱同步
+- Web UI：仪表盘、账号列表搜索、用户控制台（资料、货币、体力、主线进度、库存、皮肤、头像、干员、编队、订单、邮件、Token、JSON 导出）、邮件中心、请求日志、服务与更新设置
 
 ## 开发模式
 
@@ -57,7 +58,8 @@ Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`�
 - `POST /account/login` → 200，`uid=10000000`
 - `POST /account/syncData` → 200，返回完整 `user`（约 605 KB）
 - `POST /quest/battleStart` → 200，返回 `battleId`
-- Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200
+- Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200；用户控制台 `/admin/accounts/10000000`、邮件中心 `/admin/mail`、服务与更新 `/admin/settings` 均 200
+- 无头协议测试：`48 passed`，覆盖用户控制台写回、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源
 - 客户端侧：登录链路已走到 `syncData`，并曾进入游戏主界面 / 签到页 / 干员页
 
 > 2026-11-22 修复：`/account/syncData` 现在同时刷新 `status.lastOnlineTs` 和 `status.lastRefreshTs`。此前只刷新前者，客户端会用旧的刷新时间做身份同步校验并弹出“同步身份信息失败 / 错误号 200”。修复后真实客户端登录直接进入签到页，未再弹窗。

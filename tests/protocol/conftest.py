@@ -67,6 +67,14 @@ def test_account(client):
                 conn.execute("DELETE FROM battle_sessions WHERE account_id=?", (account_id,))
                 conn.execute("DELETE FROM orders WHERE account_id=?", (account_id,))
                 conn.execute("DELETE FROM sessions WHERE account_id=?", (account_id,))
+                tables = {
+                    row[0]
+                    for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                }
+                if "mail_instances" in tables:
+                    conn.execute("DELETE FROM mail_instances WHERE account_id=?", (account_id,))
+                if "mail_templates" in tables:
+                    conn.execute("DELETE FROM mail_templates WHERE name LIKE 'protocol_template_%'")
             conn.execute("DELETE FROM accounts WHERE phone=?", (phone,))
 
 

@@ -88,6 +88,41 @@ def init_db():
                 started_at INTEGER NOT NULL,
                 finished_at INTEGER
             );
+            CREATE TABLE IF NOT EXISTS mail_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                sender TEXT NOT NULL DEFAULT 'penguin_logistics',
+                subject TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                items_json TEXT NOT NULL DEFAULT '[]',
+                expire_days INTEGER NOT NULL DEFAULT 365,
+                style_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS mail_instances (
+                mail_id INTEGER PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                uid INTEGER NOT NULL,
+                template_id INTEGER,
+                template_name TEXT,
+                sender TEXT NOT NULL DEFAULT 'penguin_logistics',
+                subject TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                items_json TEXT NOT NULL DEFAULT '[]',
+                create_at INTEGER NOT NULL,
+                expire_at INTEGER NOT NULL DEFAULT -1,
+                receive_at INTEGER,
+                state INTEGER NOT NULL DEFAULT 0,
+                has_item INTEGER NOT NULL DEFAULT 0,
+                removed INTEGER NOT NULL DEFAULT 0,
+                type INTEGER NOT NULL DEFAULT 1,
+                survey_mail_id TEXT,
+                collection_id TEXT,
+                style_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_mail_instances_uid
+                ON mail_instances(uid, removed, create_at DESC);
             """
         )
         order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}

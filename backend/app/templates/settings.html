@@ -1,24 +1,86 @@
 {% extends "base.html" %}
 {% set active = 'settings' %}
-{% block title %}服务设置 · Arknights 本机后端{% endblock %}
+{% block title %}服务与更新 · Arknights 本机后端{% endblock %}
 {% block content %}
 <header class="page-head">
-  <div><p class="eyebrow">SETTINGS</p><h1>服务设置</h1></div>
+  <div><p class="eyebrow">SERVICE & DELIVERY</p><h1>服务与更新</h1></div>
+  <a class="btn" href="/api/game/get_latest_game_info" target="_blank" rel="noreferrer">查看更新接口</a>
 </header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
 <section class="panel">
-  <form class="form" method="post" action="/admin/settings">
-    <label>服务器名称<input name="server_name" value="{{ server_name }}" required></label>
-    <label>登录公告<textarea name="announcement" rows="4">{{ announcement }}</textarea></label>
-    <div class="actions"><button class="primary" type="submit">保存</button></div>
+  <div class="panel-head"><h2>服务状态</h2><span class="muted">登录、维护与公告</span></div>
+  <form class="form-grid" method="post" action="/admin/settings">
+    <label>服务器名称<input name="server_name" value="{{ settings.server_name }}" required></label>
+    <label>运营备注<textarea name="announcement" rows="2">{{ settings.announcement }}</textarea></label>
+    <label class="check"><input type="checkbox" name="maintenance" value="1" {% if settings.maintenance %}checked{% endif %}> 开启维护模式</label>
+    <label>维护提示<input name="maintenance_message" value="{{ settings.maintenance_message }}"></label>
+
+    <div class="span-all section-label"><span>版本与客户端强制更新</span></div>
+    <label>客户端版本<input class="mono" name="client_version" value="{{ settings.client_version }}" required></label>
+    <label>资源版本<input class="mono" name="res_version" value="{{ settings.res_version }}" required></label>
+    <label class="check"><input type="checkbox" name="force_update" value="1" {% if settings.force_update %}checked{% endif %}> 强制客户端版本一致</label>
+    <label class="check"><input type="checkbox" name="force_launcher_update" value="1" {% if settings.force_launcher_update %}checked{% endif %}> 启动器强制更新（需填 APK 地址）</label>
+    <label class="check"><input type="checkbox" name="force_resource_update" value="1" {% if settings.force_resource_update %}checked{% endif %}> 强制资源版本一致</label>
+    <label>APK / 更新包地址<input class="mono" name="update_url" value="{{ settings.update_url }}" placeholder="https://.../arknights.apk"></label>
+    <label>更新说明<textarea name="update_notes" rows="2">{{ settings.update_notes }}</textarea></label>
+
+    <div class="span-all section-label"><span>资源下发</span></div>
+    <label>客户端资源地址 hu<input class="mono" name="asset_base_url" value="{{ settings.asset_base_url }}" placeholder="http://127.0.0.1:8443/assetbundle/official"></label>
+    <label>缺失资源回源地址<input class="mono" name="asset_fallback_url" value="{{ settings.asset_fallback_url }}" placeholder="https://ak.hycdn.cn/assetbundle/official"></label>
+    <label class="span-all">本地资源根目录<input class="mono" name="asset_root" value="{{ settings.asset_root }}" placeholder="/root/mingrifangzhouyun/server/assets"></label>
+    <p class="muted span-all small-note">本地查找路径为 <span class="mono">{asset_root}/{平台}/assets/{资源哈希}/{文件名}</span>。本地未命中时会 302 到回源地址，不会再次跳回本机资源地址。</p>
+    <div class="actions span-all"><button class="primary" type="submit">保存服务设置</button></div>
   </form>
 </section>
+
 <section class="panel">
-  <div class="panel-head"><h2>版本信息</h2></div>
+  <div class="panel-head"><h2>资源分发状态</h2><span class="muted">{{ asset_status.files }} 个文件</span></div>
   <dl class="kv">
-    <dt>客户端版本</dt><dd class="mono">{{ client_version }}</dd>
-    <dt>资源版本</dt><dd class="mono">{{ res_version }}</dd>
-    <dt>管理台账号</dt><dd>sdars（密码在首次启动时由环境变量 ARK_ADMIN_PASSWORD 初始化）</dd>
+    <dt>资源根目录</dt><dd class="mono">{{ asset_status.root or '未配置' }}</dd>
+    <dt>目录状态</dt><dd>{% if asset_status.exists %}<span class="status s2">可读</span>{% else %}<span class="status s4">不存在</span>{% endif %}</dd>
+    <dt>文件数量</dt><dd>{{ asset_status.files }}</dd>
+    <dt>总大小</dt><dd>{{ '%.2f MB'|format(asset_status.bytes / 1048576) }}</dd>
+    <dt>最近修改</dt><dd class="mono">{{ asset_status.latest_at or '-' }}</dd>
   </dl>
+  {% if asset_status.sample %}
+  <div class="table-wrap short">
+  <table class="table compact-table">
+    <thead><tr><th>相对路径</th><th>大小</th><th>修改时间</th></tr></thead>
+    <tbody>
+    {% for file in asset_status.sample %}
+      <tr><td class="mono">{{ file.path }}</td><td>{{ file.size }}</td><td class="mono">{{ file.mtime }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">目录为空。可通过下方上传单个资源文件或完整 ZIP 包。</p>
+  {% endif %}
+</section>
+
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>上传资源</h2><span class="muted">ZIP 会按包内目录结构解压；单文件需要填写相对前缀</span></div>
+  <form class="form-grid" method="post" action="/admin/settings/assets/upload" enctype="multipart/form-data">
+    <label class="span-all">资源文件或 ZIP 包<input type="file" name="upload" required></label>
+    <label class="span-all">相对前缀<input class="mono" name="prefix" placeholder="Android/assets/26-11-13-06-37-23-89286612"></label>
+    <p class="muted span-all small-note">示例：上传 <span class="mono">hot_update_list.json</span> 并填写前缀 <span class="mono">Android/assets/&lt;hash&gt;</span> 后，客户端请求 <span class="mono">/assetbundle/official/Android/assets/&lt;hash&gt;/hot_update_list.json</span> 会直接命中本地文件。</p>
+    <div class="actions span-all"><button class="primary" type="submit">上传并启用</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>当前生效值</h2><span class="muted">接口实时读取 SQLite settings</span></div>
+  <div class="table-wrap">
+  <table class="table compact-table">
+    <thead><tr><th>配置项</th><th>值</th></tr></thead>
+    <tbody>
+    {% for key, value in settings.items() %}
+      <tr><td class="mono">{{ key }}</td><td class="mono">{{ value }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
 </section>
 {% endblock %}
-

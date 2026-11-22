@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% set active = 'mail' %}
+{% block title %}邮件中心 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">MAIL OPERATIONS</p><h1>邮件中心</h1></div>
+  <span class="muted">{{ accounts|length }} 个账号 · 最近 {{ mails|length }} 封</span>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{ '编辑模板' if edit_template else '新建 / 更新模板' }}</h2>
+      {% if edit_template %}<a href="/admin/mail">取消编辑</a>{% endif %}
+    </div>
+    <form class="form" method="post" action="/admin/mail/templates">
+      <label>模板名<input name="name" value="{{ edit_template.name if edit_template else '' }}" placeholder="event_reward" required></label>
+      <label>发件人<input name="sender" value="{{ edit_template.sender if edit_template else 'penguin_logistics' }}"></label>
+      <label>标题<input name="subject" value="{{ edit_template.subject if edit_template else '' }}" required></label>
+      <label>正文<textarea name="content" rows="5">{{ edit_template.content if edit_template else '' }}</textarea></label>
+      <label>附件 JSON<textarea class="mono" name="items" rows="6" placeholder='[{"id":"4001","type":"GOLD","count":20000}]'>{% if edit_template %}{{ edit_template['items']|tojson }}{% endif %}</textarea></label>
+      <label>有效天数<input type="number" name="expire_days" value="{{ edit_template.expire_days if edit_template else 365 }}" min="0"></label>
+      <div class="actions"><button class="primary" type="submit">保存模板</button></div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>模板库</h2><span class="muted">{{ mail_templates|length }}</span></div>
+    <div class="table-wrap short">
+    <table class="table compact-table">
+      <thead><tr><th>ID</th><th>模板</th><th>附件</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for template in mail_templates %}
+        <tr>
+          <td class="mono">{{ template.id }}</td>
+          <td>{{ template.name }}<div class="muted">{{ template.subject }}</div></td>
+          <td class="mono small-text">{% for item in template['items'] %}{{ item.id }}×{{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
+          <td>
+            <div class="actions">
+              <a class="btn" href="/admin/mail?edit={{ template.id }}">编辑</a>
+              <form method="post" action="/admin/mail/templates/{{ template.id }}/delete" onsubmit="return confirm('删除该模板？已发送邮件不受影响。')">
+                <button class="danger" type="submit">删除</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      {% else %}<tr><td colspan="4" class="muted">暂无模板</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>发送邮件</h2><span class="muted">支持单账号、多 UID 或全服广播</span></div>
+  <form class="form-grid" method="post" action="/admin/mail/send">
+    <label>模板
+      <select name="template_id">
+        <option value="">不使用模板</option>
+        {% for template in mail_templates %}
+        <option value="{{ template.id }}">{{ template.name }} · {{ template.subject }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>投递范围
+      <select name="scope">
+        <option value="one">指定账号 / UID 列表</option>
+        <option value="all">全部账号广播</option>
+      </select>
+    </label>
+    <label>账号
+      <select name="uid">
+        <option value="">不指定</option>
+        {% for account in accounts %}
+        <option value="{{ account.uid }}">{{ account.uid }} · {{ account.nickname }} · {{ account.phone }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>额外 UID 列表<input name="uids" placeholder="10000000,10000001"></label>
+    <label>发件人<input name="sender" placeholder="保留模板值"></label>
+    <label>标题<input name="subject" placeholder="保留模板值"></label>
+    <label>有效天数<input type="number" name="expire_days" placeholder="模板值"></label>
+    <label class="span-all">正文<textarea name="content" rows="4" placeholder="留空保留模板正文"></textarea></label>
+    <label class="span-all">附件 JSON<textarea class="mono" name="items" rows="4" placeholder='[{"id":"4002","type":"DIAMOND","count":5}]'> </textarea></label>
+    <p class="muted span-all small-note">附件留空时使用模板附件；填写后会完全替换模板附件。type 必须与 item_table 的 itemType 一致。</p>
+    <div class="actions span-all"><button class="primary" type="submit">发送</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>最近邮件</h2><span class="muted">按创建时间倒序</span></div>
+  <form class="filter-form" method="get" action="/admin/mail">
+    <input name="q" value="{{ q }}" placeholder="UID / 手机号 / 昵称 / 标题">
+    <button type="submit">搜索</button>
+    {% if q %}<a class="btn" href="/admin/mail">清空</a>{% endif %}
+  </form>
+  <div class="table-wrap">
+  <table class="table compact-table">
+    <thead><tr><th>Mail ID</th><th>收件人</th><th>标题</th><th>附件</th><th>状态</th><th>创建 / 到期</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for mail in mails %}
+      <tr>
+        <td class="mono">{{ mail.mail_id }}</td>
+        <td><a class="mono" href="/admin/accounts/{{ mail.uid }}#mail">{{ mail.uid }}</a><div class="muted">{{ mail.nickname or mail.phone or '-' }}</div></td>
+        <td>{{ mail.subject }}<div class="muted mono">{{ mail.sender }}</div></td>
+        <td class="mono small-text">{% for item in mail['items'] %}{{ item.id }}×{{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
+        <td>{% if mail.removed %}<span class="status s4">已删除</span>{% elif mail.state %}<span class="status s2">已领取</span>{% else %}<span class="status s3">未领取</span>{% endif %}</td>
+        <td class="mono">{{ mail.create_at }}<div class="muted">{{ mail.expire_at }}</div></td>
+        <td>
+          <div class="actions">
+            <a class="btn" href="/admin/accounts/{{ mail.uid }}#mail">账号</a>
+            <form method="post" action="/admin/mail/{{ mail.mail_id }}/delete" onsubmit="return confirm('删除这封邮件？')">
+              <button class="danger" type="submit">删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% else %}<tr><td colspan="7" class="muted">暂无邮件</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}
