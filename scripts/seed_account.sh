@@ -38,13 +38,36 @@ cat > tmp/ark-sdk-prefs.xml <<XML
 <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
 <map>
     <boolean name="IS_AUTO_LOGIN" value="true" />
-    <string name="USER_CACHE">[{"phone":"${ARK_PHONE}","token":"${ARK_TOKEN}","lastLoginTime":"2026-01-01 00:00","hgId":"1","deviceToken":"${DEVICE_TOKEN}"}]</string>
+    <string name="USER_CACHE">[{"phone":"${ARK_PHONE}","token":"${ARK_TOKEN}","lastLoginTime":"$(date '+%Y/%m/%d %H:%M')","hgId":"1","deviceToken":"${DEVICE_TOKEN}"}]</string>
     <string name="DEVICE_CACHE">[{"hgId":"1","deviceToken":"${DEVICE_TOKEN}"}]</string>
     <string name="HypergryphUserProtocol">1</string>
     <boolean name="cache_account_times" value="true" />
 </map>
 XML
 
-adb -s "$ADB_SERIAL" push tmp/ark-sdk-prefs.xml /sdcard/ark-sdk-prefs.xml >/dev/null
-adb -s "$ADB_SERIAL" shell "su -c 'APP_UID=\$(stat -c %u /data/data/com.hypergryph.arknights); APP_GID=\$(stat -c %g /data/data/com.hypergryph.arknights); cp /sdcard/ark-sdk-prefs.xml /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml; chown \$APP_UID:\$APP_GID /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml; chmod 660 /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml; restorecon /data/data/com.hypergryph.arknights/shared_prefs/HypergryphSdkPreferences.xml'"
+cat > tmp/ark-write-prefs.sh <<'SH'
+#!/system/bin/sh
+set -eu
+APP_DIR=/data/data/com.hypergryph.arknights
+PREFS="$APP_DIR/shared_prefs"
+BACKUP=/sdcard/ark_backup
+TS=$(date +%Y%m%d-%H%M%S)
+mkdir -p "$BACKUP"
+if [ -f "$PREFS/HypergryphSdkPreferences.xml" ]; then
+  cp "$PREFS/HypergryphSdkPreferences.xml" "$BACKUP/HypergryphSdkPreferences.xml.$TS"
+fi
+mkdir -p "$PREFS"
+cp /data/local/tmp/ark-sdk-prefs.xml "$PREFS/HypergryphSdkPreferences.xml"
+APP_UID=$(stat -c %u "$APP_DIR")
+APP_GID=$(stat -c %g "$APP_DIR")
+chown "$APP_UID:$APP_GID" "$PREFS" "$PREFS/HypergryphSdkPreferences.xml"
+chmod 771 "$PREFS"
+chmod 660 "$PREFS/HypergryphSdkPreferences.xml"
+restorecon -R "$PREFS" 2>/dev/null || true
+ls -l "$PREFS/HypergryphSdkPreferences.xml"
+SH
+
+adb -s "$ADB_SERIAL" push tmp/ark-sdk-prefs.xml /data/local/tmp/ark-sdk-prefs.xml >/dev/null
+adb -s "$ADB_SERIAL" push tmp/ark-write-prefs.sh /data/local/tmp/ark-write-prefs.sh >/dev/null
+adb -s "$ADB_SERIAL" shell "su -M -c 'sh /data/local/tmp/ark-write-prefs.sh'"
 echo "done; force-stop the game before next launch: adb -s ${ADB_SERIAL} shell am force-stop com.hypergryph.arknights"

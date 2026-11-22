@@ -4,7 +4,7 @@ from urllib.parse import quote
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from ..config import CONFIG_VER, FUNC_VER, RES_VERSION, CLIENT_VERSION, SERVER_URL, APP_CODE
+from ..config import ASSET_CDN, CONFIG_VER, FUNC_VER, RES_VERSION, CLIENT_VERSION, SERVER_URL, APP_CODE
 
 router = APIRouter()
 
@@ -14,7 +14,7 @@ def network_config():
         "an": f"{SERVER_URL}/config/prod/announce_meta/{{0}}/announcement.meta.json",
         "as": SERVER_URL,
         "gs": SERVER_URL,
-        "hu": f"{SERVER_URL}/assetbundle/official",
+        "hu": ASSET_CDN,
         "hv": f"{SERVER_URL}/config/prod/official/{{0}}/version",
         "of": "https://ak.hypergryph.com/index.html",
         "sl": "https://ak.hypergryph.com/protocol/service",
@@ -40,7 +40,7 @@ def signed_network_config():
                     "gs": SERVER_URL,
                     "as": SERVER_URL,
                     "u8": f"{SERVER_URL}/u8",
-                    "hu": f"{SERVER_URL}/assetbundle/official",
+                    "hu": ASSET_CDN,
                     "hv": f"{SERVER_URL}/config/prod/official/{{0}}/version",
                     "rc": f"{SERVER_URL}/config/prod/official/remote_config",
                     "an": f"{SERVER_URL}/config/prod/announce_meta/{{0}}/announcement.meta.json",
@@ -152,10 +152,7 @@ async def announce_meta(os_name: str):
 async def asset_bundle(os_name: str, assets_hash: str, file_name: str):
     if not assets_hash.replace("-", "").replace("_", "").isalnum() or ".." in file_name:
         return JSONResponse({"error": "bad request"}, status_code=400)
-    target = (
-        "https://ak.hycdn.cn/assetbundle/official/"
-        f"{os_name}/assets/{assets_hash}/{quote(file_name)}"
-    )
+    target = f"{ASSET_CDN}/{os_name}/assets/{assets_hash}/{quote(file_name)}"
     return RedirectResponse(target, status_code=302)
 
 

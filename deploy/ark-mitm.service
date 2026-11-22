@@ -1,0 +1,14 @@
+[Unit]
+Description=Arknights TLS reverse proxy (device 8444 -> 127.0.0.1:4443)
+After=network-online.target ark-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/mingrifangzhouyun/bridge
+ExecStart=/root/Knight/.venv/bin/mitmdump --mode reverse:http://127.0.0.1:8443 --listen-host 127.0.0.1 --listen-port 4443 -w flows/reverse-systemd.mitm
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

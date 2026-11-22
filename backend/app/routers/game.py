@@ -57,9 +57,11 @@ async def sync_data(request: Request):
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
     status["serverName"] = SERVER_NAME
-    status["lastOnlineTs"] = now_ts()
+    ts = now_ts()
+    status["lastOnlineTs"] = ts
+    status["lastRefreshTs"] = ts
     save_player(account, user)
-    return {"result": 0, "ts": now_ts(), "user": user, **empty_delta()}
+    return {"result": 0, "ts": ts, "user": user, **empty_delta()}
 
 
 @router.post("/account/syncStatus")
