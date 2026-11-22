@@ -215,3 +215,50 @@ def checkin_reward(group_id, index):
             "count": int(item.get("count") or 1),
         }
     return None
+
+
+def open_server_table():
+    return excel("open_server_table.json") or {}
+
+
+def open_server_v3_data():
+    return open_server_table().get("openServerV3Data") or {}
+
+
+def open_server_v3_checkin_group(group_id):
+    groups = open_server_v3_data().get("checkInData") or {}
+    return groups.get(str(group_id or "")) or {}
+
+
+def open_server_v3_checkin_rewards(group_id, index):
+    """Return the ItemBundle list for a 0-based open-server check-in day."""
+    group = open_server_v3_checkin_group(group_id)
+    wanted_order = int(index) + 1
+    for entry in group.get("checkInItemList") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            order = int(entry.get("order") or 0)
+        except (TypeError, ValueError):
+            continue
+        if order != wanted_order:
+            continue
+        rewards = []
+        for reward in entry.get("rewardList") or []:
+            if not isinstance(reward, dict):
+                continue
+            try:
+                count = int(reward.get("count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if not reward.get("id") or not reward.get("type") or count <= 0:
+                continue
+            rewards.append(
+                {
+                    "id": str(reward["id"]),
+                    "type": str(reward["type"]),
+                    "count": count,
+                }
+            )
+        return rewards
+    return []

@@ -30,6 +30,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - SDK 启动链路：`/app/v1/config`、`/user/info/v1/basic`、`/user/oauth2/v2/grant`、`/u8/user/v1/getToken`、`/u8/pay/getAllProductList`
 - 游戏登录：`/account/login`、`/account/syncData`、`/account/syncStatus`、`/account/syncPushMessage`
 - 战斗：`/quest/battleStart`、`/quest/battleFinish`
+- 签到：`/user/checkIn` 与累计签到 `/openServerV3/getCheckInReward`；累计签到按 `open_server_table.json` 发奖，写 `checkIn.history` 的 0/1 领取状态，重复请求不重复发放，并兼容 `/activity/getOpenServerCheckInReward`
 - 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店
 - 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号
 - 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
@@ -59,12 +60,14 @@ Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`�
 - `POST /account/syncData` → 200，返回完整 `user`（约 605 KB）
 - `POST /quest/battleStart` → 200，返回 `battleId`
 - Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200；用户控制台 `/admin/accounts/10000000`、邮件中心 `/admin/mail`、服务与更新 `/admin/settings` 均 200
-- 无头协议测试：`50 passed`，覆盖用户控制台写回、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
+- 无头协议测试：`52 passed`，覆盖用户控制台写回、累计签到发奖与幂等、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
 - 客户端侧：登录链路已走到 `syncData`，并曾进入游戏主界面 / 签到页 / 干员页
 
 > 2026-11-22 修复：`/account/syncData` 现在同时刷新 `status.lastOnlineTs` 和 `status.lastRefreshTs`。此前只刷新前者，客户端会用旧的刷新时间做身份同步校验并弹出“同步身份信息失败 / 错误号 200”。修复后真实客户端登录直接进入签到页，未再弹窗。
 
 > 2026-11-23 二次修复：错误号 200 也是 HGSDK 的 `RESPONSE_ERROR`。mitm reverse 模式下按路径拦截 `basic` / `grant`，统一返回 `data` 字符串信封；缓存 token 过期时自动回退到 `.env` 的本地账号，真机冷启动登录链全部 200。
+
+> 2026-11-23 三次修复：`/openServerV3/getCheckInReward` 原先落入空 delta 兜底，客户端收到 200 但 UI 不刷新。现在按 `index` 读取累计签到表、发放 `items` / `reward`、把 `history[index]` 置 0、同步 `status` 与 `openServerV3` 增量并落库；重复领取保持幂等。
 
 ## 快速开始
 

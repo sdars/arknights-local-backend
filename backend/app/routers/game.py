@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 
@@ -12,6 +13,7 @@ from ..shop_fixtures import shop_response
 from .. import battles, game_data, grants, mail_service, missions, payments, runtime_settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def empty_delta():
@@ -265,6 +267,94 @@ async def user_checkin(request: Request):
         "subscriptionRewards": [],
         "playerDataDelta": delta,
     }
+
+
+def _open_server_v3_claim(account, body):
+    user = player_data(account)
+    v3 = user.setdefault("openServerV3", {})
+    if not isinstance(v3, dict):
+        v3 = {}
+        user["openServerV3"] = v3
+    checkin = v3.setdefault("checkIn", {})
+    if not isinstance(checkin, dict):
+        checkin = {}
+        v3["checkIn"] = checkin
+    group_id = str(checkin.get("groupId") or "new_login_g_1")
+    checkin["groupId"] = group_id
+    history = checkin.get("history")
+    if not isinstance(history, list):
+        history = []
+        checkin["history"] = history
+    normalized = []
+    for value in history:
+        normalized.append(1 if _as_int(value, 1) else 0)
+    history[:] = normalized
+
+    index = _as_int(body.get("index"), 0)
+    if index < 0:
+        index = next((i for i, value in enumerate(history) if value == 1), 0)
+    while len(history) <= index:
+        history.append(1)
+
+    logger.info("openServerV3 checkin uid=%s index=%s history=%s", account["uid"], index, history)
+    if history[index] == 0:
+        return {
+            "result": 0,
+            "items": [],
+            "playerDataDelta": {
+                "deleted": {},
+                "modified": {"openServerV3": v3},
+            },
+            "pushMessage": [],
+        }
+
+    rewards = game_data.open_server_v3_checkin_rewards(group_id, index)
+    if not rewards:
+        return {
+            "result": 0,
+            "items": [],
+            "playerDataDelta": {"deleted": {}, "modified": {}},
+            "pushMessage": [],
+        }
+    history[index] = 0
+    granted, delta = grants.apply_items(user, rewards, source="open-server-v3-checkin", now=now_ts())
+    delta.setdefault("deleted", {})
+    modified = delta.setdefault("modified", {})
+    modified["openServerV3"] = v3
+    save_player(account, user)
+    response = {
+        "result": 0,
+        "items": granted,
+        "playerDataDelta": delta,
+        "pushMessage": [],
+    }
+    if granted:
+        response["reward"] = granted[0]
+    return response
+
+
+@router.post("/openServerV3/getCheckInReward")
+async def open_server_v3_checkin_reward(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return _open_server_v3_claim(account, body)
+
+
+@router.post("/activity/getOpenServerCheckInReward")
+async def activity_open_server_checkin_reward(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return _open_server_v3_claim(account, body)
 
 
 @router.post("/mail/getMetaInfoList")
