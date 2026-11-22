@@ -95,16 +95,28 @@ ensure_pay_routes() {
     log "WARN: could not resolve $pkg uid for payment routes"
     return 0
   fi
-  # Keep Hypergryph SDK traffic and Alipay page-pay on the local mitm path.
-  # Hosts alone is not enough: the WebView and Java SDK use their own DNS cache.
-  local nets=(110.75.170.0/24 110.75.231.202/32 110.75.236.202/32 110.75.244.202/32 110.76.18.202/32)
-  local script=""
-  local net
-  for net in "${nets[@]}"; do
-    script+="iptables -t nat -C OUTPUT -d ${net} -m owner --uid-owner ${uid} -p tcp --dport 443 -j DNAT --to-destination 127.0.0.1:${DEVICE_SDK_PORT} 2>/dev/null || iptables -t nat -I OUTPUT -d ${net} -m owner --uid-owner ${uid} -p tcp --dport 443 -j DNAT --to-destination 127.0.0.1:${DEVICE_SDK_PORT}; "
+  # Keep Hypergryph SDK, launcher, WebView and Alipay page-pay on the local
+  # mitm path. Hosts alone is not enough because Android netd caches DNS and
+  # the Java SDK / WebView use their own resolver state. Use an app-UID scoped
+  # chain so unrelated apps and the resource CDN keep their normal routing.
+  local domains=(as.hypergryph.com game-config.hypergryph.com ak-conf.hypergryph.com launcher.hypergryph.com ak-webview.hypergryph.com openapi.alipay.com)
+  local routes=(110.75.170.0/24 110.75.231.202/32 110.75.236.202/32 110.75.244.202/32 110.76.18.202/32 43.145.18.0/24 43.174.224.0/23)
+  local domain line ip
+  for domain in "${domains[@]}"; do
+    line=$(timeout 10 adb -s "$ADB_SERIAL" shell "ping -c 1 -W 1 ${domain}" 2>/dev/null | head -1 || true)
+    ip=$(printf '%s' "$line" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)' | head -1 | tr -d '()')
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$ip" != 127.* ]]; then
+      routes+=("${ip}/32")
+    fi
   done
+  local script="iptables -t nat -N ARK_LOCAL 2>/dev/null || true; iptables -t nat -F ARK_LOCAL; "
+  local route
+  while IFS= read -r route; do
+    script+="iptables -t nat -A ARK_LOCAL -d ${route} -p tcp --dport 443 -j DNAT --to-destination 127.0.0.1:${DEVICE_SDK_PORT}; "
+  done < <(printf '%s\n' "${routes[@]}" | sort -u)
+  script+="iptables -t nat -C OUTPUT -m owner --uid-owner ${uid} -p tcp --dport 443 -j ARK_LOCAL 2>/dev/null || iptables -t nat -I OUTPUT 1 -m owner --uid-owner ${uid} -p tcp --dport 443 -j ARK_LOCAL; "
   if ! timeout 20 adb -s "$ADB_SERIAL" shell "su -M -c '$script'" >/dev/null 2>&1; then
-    log "WARN: could not ensure payment DNAT routes"
+    log "WARN: could not ensure app scoped local TLS routes"
   fi
 }
 

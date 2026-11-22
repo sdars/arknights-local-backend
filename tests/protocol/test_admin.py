@@ -23,7 +23,7 @@ def test_admin_login_and_development_page(client):
     login = admin_login(client)
     assert login.status_code == 303
     assert login.headers["location"] == "/admin"
-    page = client.get(f"{client.base_url}/admin/development", timeout=15)
+    page = client.get(f"{client.base_url}/admin/development", timeout=30)
     assert page.status_code == 200
     assert "静态逆向" in page.text
     assert "无头协议" in page.text
@@ -32,6 +32,19 @@ def test_admin_login_and_development_page(client):
     body = catalog.json()
     assert body["counts"]["routes"] >= 1
     assert body["counts"]["protocol_types"] >= 1
+
+
+def test_adb_diagnostics_cover_app_tls_path(client):
+    assert admin_login(client).status_code == 303
+    response = client.get(f"{client.base_url}/admin/development/adb.json", timeout=30)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "device"
+    assert body["proxy"] == ":0"
+    assert body["hosts_ok"] is True
+    assert body["local_route_ok"] is True
+    assert body["device_backend_ok"] is True
+    assert body["app_tls_ok"] is True, body["app_tls_detail"]
 
 
 def test_protocol_index_and_api(client):

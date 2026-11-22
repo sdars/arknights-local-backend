@@ -963,8 +963,31 @@ async def development_page(request: Request):
     return templates.TemplateResponse(
         request,
         "development.html",
-        {"admin": admin_name(request), "status": status, "gate_done": gate_done},
+        {
+            "admin": admin_name(request),
+            "status": status,
+            "gate_done": gate_done,
+            "message": _take_flash(request),
+        },
     )
+
+
+@router.post("/development/repair-adb")
+async def development_repair_adb(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    result = await run_in_threadpool(selfcheck.repair_adb)
+    _flash(request, "ADB 链路已修复" if result.get("ok") else "ADB 修复失败，请查看 watchdog 日志")
+    return RedirectResponse("/admin/development", status_code=303)
+
+
+@router.get("/development/adb.json")
+async def development_adb_json(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    return JSONResponse(await run_in_threadpool(selfcheck.adb_diagnostics))
 
 
 @router.get("/protocol", response_class=HTMLResponse)

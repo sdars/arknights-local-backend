@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import re
 import subprocess
 import struct
 import sys
@@ -41,6 +42,7 @@ ARTIFACT_LABELS = {
 }
 
 _CACHE = {"ts": 0.0, "data": None}
+_ADB_PROBE_CACHE = {"ts": 0.0, "data": None}
 
 PROTOCOL_ENDPOINTS = [
     {"stage": "SDK", "method": "GET", "path": "/app/v1/config", "test": "test_sdk_config", "desc": "应用配置"},
@@ -143,7 +145,7 @@ def _backend_status(services):
         return {"ok": False, "detail": str(exc), "active": bool(backend and backend["active"])}
 
 
-def _adb_status():
+def _adb_status(detailed=False):
     serial = _env_value("ADB_SERIAL", "")
     result = {
         "serial": serial,
@@ -151,6 +153,14 @@ def _adb_status():
         "reverse": [],
         "proxy": "",
         "https_forward": False,
+        "app_uid": "",
+        "hosts_mapped": 0,
+        "hosts_ok": False,
+        "local_route_count": 0,
+        "local_route_ok": False,
+        "device_backend_ok": False,
+        "app_tls_ok": False,
+        "app_tls_detail": "",
     }
     if not serial:
         return result
@@ -165,7 +175,58 @@ def _adb_status():
         timeout=5,
     )
     result["https_forward"] = rc == 0
+    _, uid_out = _run(
+        ["adb", "-s", serial, "shell", "dumpsys package com.hypergryph.arknights | grep -m1 'userId='"],
+        timeout=5,
+    )
+    uid_match = re.search(r"userId=(\d+)", uid_out)
+    if uid_match:
+        result["app_uid"] = uid_match.group(1)
+    _, hosts_out = _run(
+        [
+            "adb",
+            "-s",
+            serial,
+            "shell",
+            "grep -cE '127\\.0\\.0\\.1 (as|game-config|ak-conf|launcher|ak-webview)\\.hypergryph\\.com|127\\.0\\.0\\.1 openapi\\.alipay\\.com' /system/etc/hosts",
+        ],
+        timeout=5,
+    )
+    result["hosts_mapped"] = int(hosts_out.strip()) if hosts_out.strip().isdigit() else 0
+    result["hosts_ok"] = result["hosts_mapped"] >= 6
+    _, rules_out = _run(
+        ["adb", "-s", serial, "shell", "su -M -c 'iptables -t nat -S ARK_LOCAL 2>/dev/null'"],
+        timeout=8,
+    )
+    route_lines = [line for line in rules_out.splitlines() if "-A ARK_LOCAL" in line and "DNAT" in line]
+    result["local_route_count"] = len(route_lines)
+    result["local_route_ok"] = bool(route_lines)
+    if detailed and (not _ADB_PROBE_CACHE["data"] or time.time() - _ADB_PROBE_CACHE["ts"] >= 30):
+        probe = {}
+        rc, http_out = _run(
+            ["adb", "-s", serial, "shell", "/system/bin/curl -sS -m 4 http://127.0.0.1:8443/healthz"],
+            timeout=7,
+        )
+        probe["device_backend_ok"] = rc == 0 and '"ok":true' in http_out
+        if result["app_uid"]:
+            app_cmd = "su -M -c \"su %s -c '/system/bin/curl -k -sS -m 6 https://launcher.hypergryph.com/general/v1/server_time'\"" % result["app_uid"]
+            rc, tls_out = _run(["adb", "-s", serial, "shell", app_cmd], timeout=20)
+            probe["app_tls_ok"] = rc == 0 and '"status":0' in tls_out and "aliyungf" not in tls_out
+            probe["app_tls_detail"] = tls_out.strip()[:240]
+        _ADB_PROBE_CACHE.update(ts=time.time(), data=probe)
+    if detailed and _ADB_PROBE_CACHE["data"]:
+        result.update(_ADB_PROBE_CACHE["data"])
     return result
+
+
+def adb_diagnostics():
+    return _adb_status(detailed=True)
+
+
+def repair_adb():
+    _ADB_PROBE_CACHE.update(ts=0.0, data=None)
+    rc, output = _run([str(ROOT / "scripts" / "watchdog.sh")], timeout=60)
+    return {"ok": rc == 0, "rc": rc, "output": output[-4000:]}
 
 
 def _newest_artifact(pattern):
@@ -455,7 +516,7 @@ def collect_status(force=False):
         "screenshot_policy": "截图仅作历史证据，不作为开发或验收手段",
         "services": services,
         "backend": _backend_status(services),
-        "adb": _adb_status(),
+        "adb": _adb_status(detailed=force),
         "metadata": metadata,
         "artifacts": artifacts,
         "catalog": catalog,
