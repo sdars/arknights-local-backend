@@ -10,7 +10,7 @@ from ..config import BATTLE_START_TEMPLATE
 from ..db import now_ts
 from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response
-from .. import battles, game_data, grants, mail_service, missions, payments, runtime_settings
+from .. import battles, game_data, grants, mail_service, missions, monthly_card, payments, runtime_settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -237,11 +237,16 @@ async def user_checkin(request: Request):
     last_checkin = int(checkin.get("lastCheckInTs", 0) or 0)
     today = time.strftime("%Y-%m-%d", time.localtime(ts))
     if last_checkin and time.strftime("%Y-%m-%d", time.localtime(last_checkin)) == today:
+        monthly_granted, monthly_delta = monthly_card.grant_daily(user, now=ts)
+        delta = {"deleted": {}, "modified": {"checkIn": checkin_delta(checkin)}}
+        grants.merge_delta(delta, monthly_delta)
+        if monthly_granted:
+            save_player(account, user)
         return {
             "result": 0,
             "signInRewards": [],
-            "subscriptionRewards": [],
-            "playerDataDelta": {"deleted": {}, "modified": {"checkIn": checkin_delta(checkin)}},
+            "subscriptionRewards": monthly_granted,
+            "playerDataDelta": delta,
         }
     group_id = str(checkin.get("checkInGroupId") or "signin99")
     history = checkin.get("checkInHistory")
@@ -260,11 +265,13 @@ async def user_checkin(request: Request):
     checkin["checkInRewardIndex"] = int(checkin.get("checkInRewardIndex", 0) or 0) + 1
     checkin["lastCheckInTs"] = ts
     delta["modified"]["checkIn"] = checkin_delta(checkin)
+    monthly_granted, monthly_delta = monthly_card.grant_daily(user, now=ts)
+    grants.merge_delta(delta, monthly_delta)
     save_player(account, user)
     return {
         "result": 0,
         "signInRewards": granted,
-        "subscriptionRewards": [],
+        "subscriptionRewards": monthly_granted,
         "playerDataDelta": delta,
     }
 

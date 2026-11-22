@@ -7,7 +7,8 @@ from urllib.parse import urlencode
 
 from .config import APP_CODE, BASE_DIR
 from .db import connect, now_ts
-from .grants import apply_items, empty_delta
+from .grants import apply_items, empty_delta, merge_delta
+from . import monthly_card
 
 
 PRODUCT_PATH = BASE_DIR / "fixtures" / "product_list.json"
@@ -16,6 +17,7 @@ _lock = threading.Lock()
 _confirm_lock = threading.Lock()
 _products = None
 _shop_goods = None
+_shop_nodes = None
 _cash_goods = None
 
 
@@ -40,10 +42,11 @@ def find_product(store_id=None, good_id=None):
 
 
 def shop_goods():
-    global _shop_goods
+    global _shop_goods, _shop_nodes
     with _lock:
-        if _shop_goods is None:
+        if _shop_goods is None or _shop_nodes is None:
             found = {}
+            nodes = {}
             if SHOP_DIR.exists():
                 for path in SHOP_DIR.glob("*.json"):
                     try:
@@ -57,11 +60,23 @@ def shop_goods():
                             good_id = node.get("goodId")
                             if good_id and isinstance(node.get("items"), list):
                                 found.setdefault(str(good_id), node["items"])
+                                nodes.setdefault(str(good_id), node)
                             stack.extend(node.values())
                         elif isinstance(node, list):
                             stack.extend(node)
             _shop_goods = found
+            _shop_nodes = nodes
         return _shop_goods
+
+
+def shop_good(good_id):
+    shop_goods()
+    return (_shop_nodes or {}).get(str(good_id or "")) or {}
+
+
+def card_id_for_good(good_id):
+    card_id = shop_good(good_id).get("cardId")
+    return str(card_id) if card_id else ""
 
 
 def cash_goods():
@@ -84,12 +99,26 @@ def cash_goods():
         return _cash_goods
 
 
+def cash_good_entry(good_id):
+    good_id = str(good_id or "")
+    entry = cash_goods().get(good_id)
+    if entry:
+        return entry
+    parts = good_id.split("_")
+    if len(parts) >= 3 and parts[0] == "CS":
+        prefix = f"CS_{parts[1]}_"
+        for candidate_id, candidate in cash_goods().items():
+            if candidate_id.startswith(prefix):
+                return candidate
+    return None
+
+
 def is_cash_good(good_id):
-    return str(good_id or "") in cash_goods()
+    return cash_good_entry(good_id) is not None
 
 
 def cash_good_item(good_id, first_purchase=False):
-    entry = cash_goods().get(str(good_id or ""))
+    entry = cash_good_entry(good_id)
     if not entry:
         return None
     if first_purchase:
@@ -383,6 +412,7 @@ def confirm_order(account, order_id):
             items = order_items(order, conn=conn)
             delta = empty_delta()
             applied = False
+            granted_items = []
             granted = int(order.get("granted", 0) or 0)
             has_ledger = bool(order.get("granted_items_json"))
             repair_cash = granted and not has_ledger and is_cash_good(order["good_id"]) and bool(items)
@@ -390,6 +420,12 @@ def confirm_order(account, order_id):
                 applied = True
                 user = json.loads(account_row["user_json"])
                 _, delta = apply_items(user, items, source="shop")
+                granted_items = list(items)
+                card_id = card_id_for_good(order["good_id"])
+                if card_id:
+                    daily, monthly_delta, _ = monthly_card.activate(user, card_id, now=now_ts())
+                    merge_delta(delta, monthly_delta)
+                    granted_items.extend(daily)
                 conn.execute(
                     "UPDATE accounts SET user_json=? WHERE id=?",
                     (
@@ -405,7 +441,7 @@ def confirm_order(account, order_id):
                     (
                         now_ts(),
                         now_ts(),
-                        json.dumps(items, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(granted_items, ensure_ascii=False, separators=(",", ":")),
                         order_id,
                     ),
                 )
@@ -417,7 +453,7 @@ def confirm_order(account, order_id):
             return {
                 "result": 0,
                 "goodId": order["good_id"],
-                "receiveItems": {"items": items if applied else [], "checkInItems": []},
+                "receiveItems": {"items": granted_items if applied else [], "checkInItems": []},
                 "orderIdList": [order_id],
                 "playerDataDelta": delta,
             }

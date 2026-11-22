@@ -69,6 +69,8 @@ PROTOCOL_ENDPOINTS = [
     {"stage": "支付", "method": "POST", "path": "/u8/pay/confirmOrderState", "test": "test_u8_confirm_order_state_reports_succeed", "desc": "订单状态确认"},
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder", "test": "test_confirm_order_applies_and_persists_rewards", "desc": "确认领取、落库与幂等"},
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#cash", "test": "test_cash_order_grants_first_purchase_and_repeat_originium", "desc": "源石首购双倍、复购与幂等"},
+    {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#cash-legacy", "test": "test_legacy_cash_product_id_uses_current_tier_reward", "desc": "旧源石商品 ID 映射"},
+    {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#monthly-card", "test": "test_monthly_card_purchase_activates_subscription_and_daily_bonus", "desc": "月卡订阅、每日奖励与幂等"},
     {"stage": "任务", "method": "POST", "path": "/mission/confirmMission", "test": "test_confirm_mission_grants_and_persists", "desc": "单任务领奖与持久化"},
     {"stage": "任务", "method": "POST", "path": "/mission/confirmMissionList", "test": "test_confirm_mission_list_and_group_rewards", "desc": "批量任务领奖"},
     {"stage": "任务", "method": "POST", "path": "/mission/autoConfirmMissions", "test": "test_confirm_mission_list_and_group_rewards", "desc": "按类型自动领奖"},

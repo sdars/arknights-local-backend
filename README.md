@@ -32,7 +32,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 战斗：`/quest/battleStart`、`/quest/battleFinish`
 - 签到：`/user/checkIn` 与累计签到 `/openServerV3/getCheckInReward`；累计签到按 `open_server_table.json` 发奖，写 `checkIn.history` 的 0/1 领取状态，重复请求不重复发放，并兼容 `/activity/getOpenServerCheckInReward`
 - 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店
-- 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号；源石商品按 `CashGoodList.json` 的 `doubleCount` / `diamondNum + plusNum` 发放，并以 `granted_items_json` 防止重复
+- 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号；源石商品按 `CashGoodList.json` 的 `doubleCount` / `diamondNum + plusNum` 发放，旧 `CS_*_r3~r6` 商品 ID 映射到当前档位；月卡激活 30 天订阅并发放当日每日奖励；所有订单用 `granted_items_json` 防止重复
 - 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
 - 邮件：模板中心、单账号/多 UID/全服发送、有效期与附件、邮件箱、单封/批量领取、防重复发奖、已读删除；`pushFlags.hasGifts` 与邮箱同步
 - Web UI：仪表盘、账号列表搜索、用户控制台（资料、货币、体力、主线进度、库存、皮肤、头像、干员、编队、订单、邮件、Token、JSON 导出）、邮件中心、请求日志、服务与更新设置
@@ -60,7 +60,7 @@ Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`�
 - `POST /account/syncData` → 200，返回完整 `user`（约 605 KB）
 - `POST /quest/battleStart` → 200，返回 `battleId`
 - Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200；用户控制台 `/admin/accounts/10000000`、邮件中心 `/admin/mail`、服务与更新 `/admin/settings` 均 200
-- 无头协议测试：`53 passed`，覆盖用户控制台写回、源石首购/复购入账、累计签到发奖与幂等、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
+- 无头协议测试：`55 passed`，覆盖用户控制台写回、源石首购/复购与旧 ID 映射、月卡订阅与每日奖励、累计签到发奖与幂等、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
 - 客户端侧：登录链路已走到 `syncData`，并曾进入游戏主界面 / 签到页 / 干员页
 
 > 2026-11-22 修复：`/account/syncData` 现在同时刷新 `status.lastOnlineTs` 和 `status.lastRefreshTs`。此前只刷新前者，客户端会用旧的刷新时间做身份同步校验并弹出“同步身份信息失败 / 错误号 200”。修复后真实客户端登录直接进入签到页，未再弹窗。

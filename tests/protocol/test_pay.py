@@ -224,6 +224,14 @@ def _account_user(uid):
     return json.loads(row[0])
 
 
+def _save_account_user(uid, user):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE accounts SET user_json=? WHERE uid=?",
+            (json.dumps(user, ensure_ascii=False, separators=(",", ":")), int(uid)),
+        )
+
+
 def test_confirm_order_applies_and_persists_rewards(client, login, test_account):
     before = _account_user(test_account["uid"])
     created = client.post(
@@ -321,3 +329,78 @@ def test_cash_order_grants_first_purchase_and_repeat_originium(client, login, te
             "SELECT granted_items_json FROM orders WHERE order_id=?", (first["orderId"],)
         ).fetchone()
     assert json.loads(row[0]) == [{"id": "4002", "type": "DIAMOND", "count": 3}]
+
+
+def test_monthly_card_purchase_activates_subscription_and_daily_bonus(client, login, test_account):
+    before = _account_user(test_account["uid"])
+    before_status = before["status"]
+    before_inventory = before.get("inventory") or {}
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5466, "goodId": "GP_mCard_1"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert confirmed["result"] == 0
+    items = confirmed["receiveItems"]["items"]
+    assert {"id": "4002", "type": "DIAMOND", "count": 6} in items
+    assert {"id": "4003", "type": "DIAMOND_SHD", "count": 200} in items
+    assert {"id": "ap_supply_lt_80", "type": "AP_SUPPLY", "count": 1} in items
+
+    after = _account_user(test_account["uid"])
+    status = after["status"]
+    assert status["androidDiamond"] == int(before_status.get("androidDiamond", 0) or 0) + 6
+    assert status["diamondShard"] == int(before_status.get("diamondShard", 0) or 0) + 200
+    assert status["monthlySubscriptionStartTime"] > 0
+    assert status["monthlySubscriptionEndTime"] > status["monthlySubscriptionStartTime"]
+    assert int((after.get("inventory") or {}).get("ap_supply_lt_80", 0)) == int(
+        before_inventory.get("ap_supply_lt_80", 0)
+    ) + 1
+    assert after["localMonthlySub"]["lastGrantDay"] > 0
+
+    duplicate = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert duplicate["receiveItems"]["items"] == []
+
+    refreshed = _account_user(test_account["uid"])
+    refreshed["localMonthlySub"]["lastGrantDay"] = 0
+    _save_account_user(test_account["uid"], refreshed)
+    before_checkin = _account_user(test_account["uid"])
+    checkin = client.post(
+        f"{client.base_url}/user/checkIn",
+        headers=login["headers"],
+        json={},
+        timeout=15,
+    ).json()
+    assert {"id": "4003", "type": "DIAMOND_SHD", "count": 200} in checkin["subscriptionRewards"]
+    after_checkin = _account_user(test_account["uid"])
+    assert after_checkin["status"]["diamondShard"] == before_checkin["status"]["diamondShard"] + 200
+
+
+def test_legacy_cash_product_id_uses_current_tier_reward(client, login):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5440, "goodId": "CS_2_r6"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert confirmed["result"] == 0
+    assert confirmed["receiveItems"]["items"] == [
+        {"id": "4002", "type": "DIAMOND", "count": 12}
+    ]
