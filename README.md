@@ -60,7 +60,7 @@ Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`�
 - `POST /account/syncData` → 200，返回完整 `user`（约 605 KB）
 - `POST /quest/battleStart` → 200，返回 `battleId`
 - Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200；用户控制台 `/admin/accounts/10000000`、邮件中心 `/admin/mail`、服务与更新 `/admin/settings` 均 200
-- 无头协议测试：`55 passed`，覆盖用户控制台写回、源石首购/复购与旧 ID 映射、月卡订阅与每日奖励、累计签到发奖与幂等、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
+- 无头协议测试：`56 passed`，覆盖用户控制台写回、源石首购/复购与旧 ID 映射、月卡订阅与每日奖励、未配置奖励拦截、累计签到发奖与幂等、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
 - 客户端侧：登录链路已走到 `syncData`，并曾进入游戏主界面 / 签到页 / 干员页
 
 > 2026-11-22 修复：`/account/syncData` 现在同时刷新 `status.lastOnlineTs` 和 `status.lastRefreshTs`。此前只刷新前者，客户端会用旧的刷新时间做身份同步校验并弹出“同步身份信息失败 / 错误号 200”。修复后真实客户端登录直接进入签到页，未再弹窗。

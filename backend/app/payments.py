@@ -410,6 +410,13 @@ def confirm_order(account, order_id):
             if not account_row:
                 return {"result": 2, "error": "account not found"}
             items = order_items(order, conn=conn)
+            card_id = card_id_for_good(order["good_id"])
+            if not items and not card_id:
+                return {
+                    "result": 1,
+                    "goodId": order["good_id"],
+                    "error": "shop reward not configured",
+                }
             delta = empty_delta()
             applied = False
             granted_items = []
@@ -421,7 +428,6 @@ def confirm_order(account, order_id):
                 user = json.loads(account_row["user_json"])
                 _, delta = apply_items(user, items, source="shop")
                 granted_items = list(items)
-                card_id = card_id_for_good(order["good_id"])
                 if card_id:
                     daily, monthly_delta, _ = monthly_card.activate(user, card_id, now=now_ts())
                     merge_delta(delta, monthly_delta)

@@ -58,7 +58,7 @@ def test_confirm_order_marks_paid(client, login):
     created = client.post(
         f"{client.base_url}/pay/createOrder",
         headers=login["headers"],
-        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        json={"storeId": 6818, "goodId": "GP_Once_411"},
         timeout=15,
     ).json()
     confirmed = client.post(
@@ -404,3 +404,26 @@ def test_legacy_cash_product_id_uses_current_tier_reward(client, login):
     assert confirmed["receiveItems"]["items"] == [
         {"id": "4002", "type": "DIAMOND", "count": 12}
     ]
+
+
+def test_unconfigured_paid_product_is_not_marked_granted(client, login):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert confirmed["result"] == 1
+    assert confirmed["error"] == "shop reward not configured"
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT status,granted FROM orders WHERE order_id=?", (created["orderId"],)
+        ).fetchone()
+    assert row[0] == 0
+    assert row[1] == 0
