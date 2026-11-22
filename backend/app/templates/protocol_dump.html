@@ -21,11 +21,13 @@
     <div><strong>dump.cs</strong><span class="mono">{{ summary.size_human }} · {{ summary.lines }} 行</span></div>
     <div><strong>stringliteral.json</strong><span class="mono">{{ summary.stringliteral.count }} 条 · {{ (summary.stringliteral.size / 1024 / 1024)|round(1) }} MB</span></div>
     <div><strong>script.json</strong><span class="mono">{{ summary.script.methods }} 个地址 · {{ (summary.script.size / 1024 / 1024)|round(1) }} MB</span></div>
+    <div><strong>il2cpp.h</strong><span class="mono">{{ summary.header.size_human }} · {{ summary.header.path }}</span></div>
   </div>
   <div class="actions">
     <a class="btn" href="/admin/protocol/dump/file?kind=dump">下载 dump.cs</a>
     <a class="btn" href="/admin/protocol/dump/file?kind=stringliteral">下载字符串表</a>
     <a class="btn" href="/admin/protocol/dump/file?kind=script">下载 script.json</a>
+    <a class="btn" href="/admin/protocol/dump/file?kind=header">下载 il2cpp.h</a>
   </div>
   <p class="muted mono">{{ summary.path }}</p>
 </section>

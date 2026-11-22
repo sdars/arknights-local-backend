@@ -40,12 +40,14 @@
     <div class="card"><span class="muted">方法 RVA</span><strong>{{ dump.method_count }}</strong></div>
     <div class="card"><span class="muted">程序集</span><strong>{{ dump.image_count }}</strong></div>
     <div class="card"><span class="muted">字符串</span><strong>{{ dump.stringliteral.count }}</strong></div>
+    <div class="card"><span class="muted">il2cpp.h</span><strong class="small">{{ dump.header.size_human }}</strong></div>
   </div>
   <p class="muted mono">{{ dump.path }} · {{ dump.size_human }} · {{ dump.lines }} 行</p>
   <div class="actions">
     <a class="btn primary" href="/admin/protocol/dump">搜索 dump.cs</a>
     <a class="btn" href="/admin/protocol/dump?q=Request">Request 类型</a>
     <a class="btn" href="/admin/protocol/dump/file?kind=dump">下载 dump.cs</a>
+    <a class="btn" href="/admin/protocol/dump/file?kind=header">下载 il2cpp.h</a>
   </div>
   {% else %}
   <p class="muted">{{ dump.detail or 'dump.cs 尚未生成' }}</p>

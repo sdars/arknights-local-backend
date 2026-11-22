@@ -88,6 +88,7 @@ def summary():
     sibling = path.parent
     stringliteral_path = sibling / "stringliteral.json"
     script_path = sibling / "script.json"
+    header_path = sibling / "il2cpp.h"
     string_count = 0
     if stringliteral_path.exists():
         try:
@@ -118,6 +119,12 @@ def summary():
             "path": str(script_path.relative_to(ROOT)) if script_path.exists() else "",
             "methods": script_methods,
             "size": script_path.stat().st_size if script_path.exists() else 0,
+        },
+        "header": {
+            "exists": header_path.exists(),
+            "path": str(header_path.relative_to(ROOT)) if header_path.exists() else "",
+            "size": header_path.stat().st_size if header_path.exists() else 0,
+            "size_human": f"{header_path.stat().st_size / 1024 / 1024:.1f} MB" if header_path.exists() else "0 B",
         },
     }
     with _lock:

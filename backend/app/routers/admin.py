@@ -316,6 +316,10 @@ async def protocol_dump_file(request: Request, kind: str = "dump"):
         path = il2cpp_dump.dump_path().parent / "script.json"
         media_type = "application/json"
         filename = "script.json"
+    elif kind == "header":
+        path = il2cpp_dump.dump_path().parent / "il2cpp.h"
+        media_type = "text/plain; charset=utf-8"
+        filename = "il2cpp.h"
     else:
         path = il2cpp_dump.dump_path()
         media_type = "text/plain; charset=utf-8"

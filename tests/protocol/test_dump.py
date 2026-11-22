@@ -29,6 +29,8 @@ def test_dump_summary_and_search(client):
     assert summary["method_count"] > 300000
     assert summary["stringliteral"]["count"] > 30000
     assert summary["script"]["methods"] > 500000
+    assert summary["header"]["exists"] is True
+    assert summary["header"]["size"] > 100000000
     assert body["total"] >= 1
     assert any("LoginRequest" in row["type"] for row in body["results"])
 
@@ -53,3 +55,4 @@ def test_dump_page(client):
     assert "dump.cs 全量索引" in page.text
     assert "stringliteral.json" in page.text
     assert "script.json" in page.text
+    assert "il2cpp.h" in page.text

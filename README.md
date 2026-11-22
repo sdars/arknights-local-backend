@@ -44,7 +44,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 
 Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`，同步显示门禁、逆向产物、协议测试矩阵与日志；新增「协议索引」页 `http://127.0.0.1:8443/admin/protocol`，支持路由搜索、Request/Response 字段偏移与方法 RVA、JSON API 和从内存 metadata 重建 catalog。全量 `dump.cs` 可在 `http://127.0.0.1:8443/admin/protocol/dump` 搜索或下载。详细流程见 `docs/静态逆向与无头测试.md`。
 
-当前逆向产物：`tmp/逆向分析/2026-11-22/global-metadata.decrypted.dat`（运行内存 dump，v29）、`tmp/逆向分析/2026-11-22/dump-static7/dump.cs`（50,548 类型 / 307,867 个方法 RVA）、`stringliteral.json`（37,294 条）、`script.json`（413,106 个方法）和 `backend/data/protocol_catalog.json`（507 路由 / 7,197 协议类型 / 1,500 个已回填字段偏移与 RVA 的 Request/Response 类型）。
+当前逆向产物：`tmp/逆向分析/2026-11-22/global-metadata.decrypted.dat`（运行内存 dump，v29）、`tmp/逆向分析/2026-11-22/dump-static8/dump.cs`（50,548 类型 / 307,867 个方法 RVA）、`stringliteral.json`（37,294 条）、`script.json`（413,106 个方法）、`il2cpp.h`（447,552 个结构体）和 `backend/data/protocol_catalog.json`（507 路由 / 7,197 协议类型 / 1,500 个已回填字段偏移与 RVA 的 Request/Response 类型）。
 
 ## 已验证
 
