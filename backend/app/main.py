@@ -7,6 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import APP_DIR, SECRET_KEY
 from .db import init_db, log_request
+from . import payments
 from .routers import admin, config_api, game, sdk
 
 app = FastAPI(title="Arknights Local Backend", docs_url=None, redoc_url=None)
@@ -47,6 +48,10 @@ async def request_logger(request: Request, call_next):
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    try:
+        payments.backfill_paid_order_grants()
+    except Exception:
+        pass
 
 
 @app.get("/healthz")

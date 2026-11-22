@@ -7,11 +7,13 @@ from urllib.parse import urlencode
 
 from .config import APP_CODE, BASE_DIR
 from .db import connect, now_ts
+from .grants import apply_items, empty_delta
 
 
 PRODUCT_PATH = BASE_DIR / "fixtures" / "product_list.json"
 SHOP_DIR = BASE_DIR / "fixtures" / "shop"
 _lock = threading.Lock()
+_confirm_lock = threading.Lock()
 _products = None
 _shop_goods = None
 
@@ -294,19 +296,60 @@ def order_state(order_id):
 
 
 def confirm_order(account, order_id):
-    order = order_by_id(order_id)
-    if not order or order["account_id"] != account["id"]:
-        return {"result": 2, "error": "order not found"}
+    with _confirm_lock:
+        with connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+            if not row or row["account_id"] != account["id"]:
+                return {"result": 2, "error": "order not found"}
+            order = dict(row)
+            account_row = conn.execute(
+                "SELECT * FROM accounts WHERE id=?", (order["account_id"],)
+            ).fetchone()
+            if not account_row:
+                return {"result": 2, "error": "account not found"}
+            items = good_items(order["good_id"])
+            delta = empty_delta()
+            if not int(order.get("granted", 0) or 0):
+                user = json.loads(account_row["user_json"])
+                _, delta = apply_items(user, items, source="shop")
+                conn.execute(
+                    "UPDATE accounts SET user_json=? WHERE id=?",
+                    (
+                        json.dumps(user, ensure_ascii=False, separators=(",", ":")),
+                        account_row["id"],
+                    ),
+                )
+                conn.execute(
+                    "UPDATE orders SET status=1,paid_at=COALESCE(paid_at,?),granted=1,granted_at=? WHERE order_id=?",
+                    (now_ts(), now_ts(), order_id),
+                )
+            return {
+                "result": 0,
+                "goodId": order["good_id"],
+                "receiveItems": {"items": items, "checkInItems": []},
+                "orderIdList": [order_id],
+                "playerDataDelta": delta,
+            }
+
+
+def backfill_paid_order_grants(limit=1000):
+    """Deliver paid orders recorded before reward persistence was added."""
     with connect() as conn:
-        conn.execute("UPDATE orders SET status=1,paid_at=? WHERE order_id=?", (now_ts(), order_id))
-    items = good_items(order["good_id"])
-    return {
-        "result": 0,
-        "goodId": order["good_id"],
-        "receiveItems": {"items": items, "checkInItems": []},
-        "orderIdList": [order_id],
-        "playerDataDelta": {"deleted": {}, "modified": {}},
-    }
+        rows = conn.execute(
+            "SELECT order_id,account_id FROM orders WHERE status=1 AND granted=0 ORDER BY created_at LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    repaired = 0
+    for row in rows:
+        with connect() as conn:
+            account = conn.execute("SELECT * FROM accounts WHERE id=?", (row["account_id"],)).fetchone()
+        if not account:
+            continue
+        result = confirm_order(dict(account), row["order_id"])
+        if result.get("result") == 0:
+            repaired += 1
+    return repaired
 
 
 def new_bill_id():

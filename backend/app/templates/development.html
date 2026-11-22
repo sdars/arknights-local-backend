@@ -15,17 +15,24 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>本轮协议覆盖</h2><span class="muted">商店 / 支付 / 主线解锁</span></div>
+  <div class="panel-head"><h2>本轮协议覆盖</h2><span class="muted">商店 / 支付 / 奖励落库</span></div>
   <div class="policy-grid">
     <div><strong>{{ status.coverage.stages }}</strong><span>玩家模板已写入的主线/活动 stage 记录，解锁采购中心与章节入口</span></div>
     <div><strong>{{ status.coverage.shop_endpoints }}</strong><span>商店列表端点，覆盖现金、组合包、时装、家具与购买状态</span></div>
     <div><strong>{{ status.coverage.pay_endpoints }}</strong><span>支付端点，含游戏订单、SDK app_product、支付宝/微信 bill 与回调</span></div>
+    <div><strong>{{ status.coverage.reward_endpoints }}</strong><span>奖励端点：购买、任务领取/批量/自动/任务组/点数兑换、签到与战斗结算</span></div>
+    <div><strong>{{ status.coverage.persistence_checks }}</strong><span>落库检查：订单幂等、任务状态、签到防重、战斗关卡与首通奖励</span></div>
     <div><strong>{{ status.coverage.tests_passed }}/{{ status.coverage.tests }}</strong><span>无头协议测试通过数（不依赖截图）</span></div>
   </div>
   <p class="muted policy-note">
     支付宝链路已切到本地闭环：<span class="mono">openapi.alipay.com</span> 由设备 hosts + 443→8444 转发进入 mitm，
     返回 302 到 <span class="mono">/pay/success?orderId=...</span>，后端立即把订单置为已支付，客户端随后读取
     <span class="mono">/pay/order/v1/state</span> 得到 <span class="mono">status=0</span>。不依赖真实支付宝商户号。
+  </p>
+  <p class="muted policy-note">
+    订单确认后在同一 SQLite 事务内写入 <span class="mono">accounts.user_json</span>，并用
+    <span class="mono">orders.granted</span> 保证幂等；启动时会补齐历史已支付但未发放的订单。任务、签到与战斗奖励同样落到玩家存档，重登后从
+    <span class="mono">/account/syncData</span> 读回。
   </p>
 </section>
 

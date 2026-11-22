@@ -59,7 +59,14 @@ def test_account(client):
     yield account
     if DB_PATH.exists():
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("DELETE FROM sessions WHERE account_id IN (SELECT id FROM accounts WHERE phone=?)", (phone,))
+            ids = [
+                row[0]
+                for row in conn.execute("SELECT id FROM accounts WHERE phone=?", (phone,)).fetchall()
+            ]
+            for account_id in ids:
+                conn.execute("DELETE FROM battle_sessions WHERE account_id=?", (account_id,))
+                conn.execute("DELETE FROM orders WHERE account_id=?", (account_id,))
+                conn.execute("DELETE FROM sessions WHERE account_id=?", (account_id,))
             conn.execute("DELETE FROM accounts WHERE phone=?", (phone,))
 
 

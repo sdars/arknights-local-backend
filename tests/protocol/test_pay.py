@@ -1,5 +1,8 @@
 import json
+import sqlite3
 from urllib.parse import unquote
+
+from conftest import DB_PATH
 
 
 def test_create_order_returns_sdk_extension(client, login):
@@ -213,3 +216,52 @@ def test_confirm_order_returns_shop_good_items(client, login):
     items = confirmed["receiveItems"]["items"]
     assert any(item["id"] == "char_1035_wisdel@game#9" for item in items)
     assert any(item["type"] == "PLAYER_AVATAR" for item in items)
+
+
+def _account_user(uid):
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT user_json FROM accounts WHERE uid=?", (int(uid),)).fetchone()
+    return json.loads(row[0])
+
+
+def test_confirm_order_applies_and_persists_rewards(client, login, test_account):
+    before = _account_user(test_account["uid"])
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5399, "goodId": "GP_Once_3"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    body = confirmed.json()
+    assert body["result"] == 0
+    assert body["playerDataDelta"]["modified"]
+    assert body["playerDataDelta"]["modified"]["status"]["gold"] == before["status"]["gold"] + 40000
+
+    after = _account_user(test_account["uid"])
+    assert after["status"]["gold"] == before["status"]["gold"] + 40000
+    assert after["status"]["androidDiamond"] == before["status"]["androidDiamond"] + 13
+    assert after["inventory"]["30032"] == int(before.get("inventory", {}).get("30032", 0) or 0) + 7
+    with sqlite3.connect(DB_PATH) as conn:
+        order = conn.execute(
+            "SELECT status,granted,granted_at FROM orders WHERE order_id=?", (created["orderId"],)
+        ).fetchone()
+    assert order[0] == 1
+    assert order[1] == 1
+    assert order[2] is not None
+
+    duplicate = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert duplicate["result"] == 0
+    duplicate_user = _account_user(test_account["uid"])
+    assert duplicate_user["status"]["gold"] == after["status"]["gold"]

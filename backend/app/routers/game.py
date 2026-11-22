@@ -10,13 +10,27 @@ from ..config import BATTLE_START_TEMPLATE, CLIENT_VERSION, RES_VERSION, SERVER_
 from ..db import now_ts
 from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response
-from .. import payments
+from .. import battles, game_data, grants, missions, payments
 
 router = APIRouter()
 
 
 def empty_delta():
     return {"playerDataDelta": {"deleted": {}, "modified": {}}}
+
+
+def checkin_delta(checkin):
+    return {
+        key: checkin.get(key)
+        for key in (
+            "canCheckIn",
+            "checkInHistory",
+            "showCount",
+            "checkInRewardIndex",
+            "lastCheckInTs",
+        )
+        if key in checkin
+    }
 
 
 def auth(request: Request):
@@ -63,6 +77,10 @@ async def sync_data(request: Request):
     ts = now_ts()
     status["lastOnlineTs"] = ts
     status["lastRefreshTs"] = ts
+    checkin = user.setdefault("checkIn", {})
+    last_checkin = int(checkin.get("lastCheckInTs", 0) or 0)
+    if not last_checkin or time.strftime("%Y-%m-%d", time.localtime(last_checkin)) != time.strftime("%Y-%m-%d", time.localtime(ts)):
+        checkin["canCheckIn"] = 1
     save_player(account, user)
     return {"result": 0, "ts": ts, "user": user, **empty_delta()}
 
@@ -92,7 +110,8 @@ async def battle_start(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     template = json.loads(BATTLE_START_TEMPLATE.read_text(encoding="utf-8"))
-    template["battleId"] = str(uuid.uuid4())
+    battle_id = str(uuid.uuid4())
+    template["battleId"] = battle_id
     template["result"] = 0
     modified = template.setdefault("playerDataDelta", {}).setdefault("modified", {})
     status = modified.setdefault("status", {})
@@ -100,8 +119,24 @@ async def battle_start(request: Request):
     status["nickName"] = account["nickname"] or "博士"
     status["serverName"] = SERVER_NAME
     stage = body.get("stageId", "guide_01")
+    user = player_data(account)
+    stages_user = user.setdefault("dungeon", {}).setdefault("stages", {})
+    stage_node = stages_user.get(stage)
+    if not isinstance(stage_node, dict):
+        stage_node = {
+            "hasBattleReplay": 0,
+            "practiceTimes": 0,
+            "state": 0,
+            "completeTimes": 0,
+            "stageId": stage,
+            "startTimes": 0,
+        }
+        stages_user[stage] = stage_node
+    stage_node["startTimes"] = int(stage_node.get("startTimes", 0) or 0) + 1
+    save_player(account, user)
+    battles.record_battle_start(account["id"], battle_id, stage)
     stages = modified.setdefault("dungeon", {}).setdefault("stages", {})
-    stages.setdefault(stage, {"hasBattleReplay": 0, "practiceTimes": 0, "state": 3, "completeTimes": 0, "stageId": stage, "startTimes": 1})
+    stages[stage] = stage_node
     return template
 
 
@@ -110,7 +145,116 @@ async def battle_finish(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
-    return {"result": 0, **empty_delta()}
+    body = await request.json()
+    return battles.finish_battle(account, body)
+
+
+@router.post("/mission/confirmMission")
+async def confirm_mission(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = missions.claim_missions(user, [body.get("missionId")], source="mission")
+    save_player(account, user)
+    return result
+
+
+@router.post("/mission/confirmMissionList")
+async def confirm_mission_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    ids = body.get("missionIds") or body.get("missionIdList") or body.get("missions") or []
+    if isinstance(ids, str):
+        ids = [ids]
+    user = player_data(account)
+    result = missions.claim_missions(user, ids, source="mission-list")
+    save_player(account, user)
+    return result
+
+
+@router.post("/mission/autoConfirmMissions")
+async def auto_confirm_missions(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = missions.auto_confirm(user, body.get("type") or "MAIN")
+    save_player(account, user)
+    return result
+
+
+@router.post("/mission/confirmMissionGroup")
+async def confirm_mission_group(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = missions.confirm_group(user, str(body.get("missionGroupId") or ""))
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/mission/exchangeMissionRewards")
+async def exchange_mission_rewards(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = missions.exchange_reward(user, str(body.get("targetRewardsId") or ""))
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/user/checkIn")
+async def user_checkin(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    checkin = user.setdefault("checkIn", {})
+    ts = now_ts()
+    last_checkin = int(checkin.get("lastCheckInTs", 0) or 0)
+    today = time.strftime("%Y-%m-%d", time.localtime(ts))
+    if last_checkin and time.strftime("%Y-%m-%d", time.localtime(last_checkin)) == today:
+        return {
+            "result": 0,
+            "signInRewards": [],
+            "subscriptionRewards": [],
+            "playerDataDelta": {"deleted": {}, "modified": {"checkIn": checkin_delta(checkin)}},
+        }
+    group_id = str(checkin.get("checkInGroupId") or "signin99")
+    history = checkin.get("checkInHistory")
+    if not isinstance(history, list):
+        history = []
+        checkin["checkInHistory"] = history
+    index = len(history)
+    reward = game_data.checkin_reward(group_id, index)
+    if not reward:
+        reward = {"id": "4001", "type": "GOLD", "count": 2000}
+    granted, delta = grants.apply_items(user, [reward], source="checkin", now=ts)
+    history.insert(0, 0)
+    checkin["canCheckIn"] = 0
+    checkin["checkInHistory"] = history
+    checkin["showCount"] = int(checkin.get("showCount", 0) or 0) + 1
+    checkin["checkInRewardIndex"] = int(checkin.get("checkInRewardIndex", 0) or 0) + 1
+    checkin["lastCheckInTs"] = ts
+    delta["modified"]["checkIn"] = checkin_delta(checkin)
+    save_player(account, user)
+    return {
+        "result": 0,
+        "signInRewards": granted,
+        "subscriptionRewards": [],
+        "playerDataDelta": delta,
+    }
 
 
 @router.post("/charBuild/batchSetCharVoiceLan")

@@ -77,10 +77,24 @@ def init_db():
                 status INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 paid_at INTEGER,
+                granted INTEGER NOT NULL DEFAULT 0,
+                granted_at INTEGER,
                 raw_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS battle_sessions (
+                battle_id TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                stage_id TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                finished_at INTEGER
             );
             """
         )
+        order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+        if "granted" not in order_columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
+        if "granted_at" not in order_columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN granted_at INTEGER")
         row = conn.execute("SELECT id FROM admin_users WHERE username=?", (ADMIN_USER,)).fetchone()
         if not row:
             conn.execute(
