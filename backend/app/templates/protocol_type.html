@@ -11,18 +11,25 @@
   <div class="card"><span class="muted">字段</span><strong>{{ item.field_count }}</strong></div>
   <div class="card"><span class="muted">方法</span><strong>{{ item.method_count }}</strong></div>
   <div class="card"><span class="muted">明细</span><strong class="small">{{ '已展开' if item.fields is defined else '摘要' }}</strong></div>
+  {% if item.dump is defined %}<div class="card"><span class="muted">TypeDefIndex</span><strong>{{ item.dump.type_def_index }}</strong></div>{% endif %}
 </section>
+{% if item.dump is defined %}
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>dump.cs 地址</h2><span class="muted mono">{{ item.dump.image }}</span></div>
+  <p class="muted">字段偏移与方法 RVA 来自 <span class="mono">dump.cs</span> 第 {{ item.dump.line }} 行；可直接用于 Ghidra/Binary Ninja 定位。</p>
+</section>
+{% endif %}
 {% if item.fields is defined %}
 <section class="panel">
   <div class="panel-head"><h2>字段</h2></div>
-  <table class="table"><thead><tr><th>名称</th><th>类型索引</th></tr></thead><tbody>
-  {% for field in item.fields %}<tr><td class="mono">{{ field.name }}</td><td class="mono">{{ field.type_index }}</td></tr>{% else %}<tr><td colspan="2" class="muted">无字段</td></tr>{% endfor %}
+  <table class="table"><thead><tr><th>名称</th><th>类型索引</th><th>偏移</th></tr></thead><tbody>
+  {% for field in item.fields %}<tr><td class="mono">{{ field.name }}</td><td class="mono">{{ field.type_index }}</td><td class="mono">{% if field.offset is defined %}0x{{ '%X'|format(field.offset) }}{% endif %}</td></tr>{% else %}<tr><td colspan="3" class="muted">无字段</td></tr>{% endfor %}
   </tbody></table>
 </section>
 <section class="panel">
   <div class="panel-head"><h2>方法</h2></div>
-  <table class="table"><thead><tr><th>名称</th><th>参数</th></tr></thead><tbody>
-  {% for method in item.methods %}<tr><td class="mono">{{ method.name }}</td><td class="mono">{{ method.parameters|map(attribute='name')|join(', ') }}</td></tr>{% else %}<tr><td colspan="2" class="muted">无方法</td></tr>{% endfor %}
+  <table class="table"><thead><tr><th>名称</th><th>RVA</th><th>参数</th><th>签名</th></tr></thead><tbody>
+  {% for method in item.methods %}<tr><td class="mono">{{ method.name }}</td><td class="mono">{% if method.rva is defined %}0x{{ '%X'|format(method.rva) }}{% endif %}</td><td class="mono">{{ method.parameters|map(attribute='name')|join(', ') }}</td><td class="mono">{{ method.signature if method.signature is defined else '' }}</td></tr>{% else %}<tr><td colspan="4" class="muted">无方法</td></tr>{% endfor %}
   </tbody></table>
 </section>
 {% endif %}

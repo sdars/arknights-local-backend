@@ -55,6 +55,17 @@ def test_protocol_type_detail(client):
     assert page.status_code == 200
     assert "platform" in page.text
     assert "已展开" in page.text
+    assert "0x10" in page.text
+    body = client.get(
+        f"{client.base_url}/admin/protocol/type/api",
+        params={"name": "Torappu.SyncDataRequest"},
+        timeout=15,
+    )
+    assert body.status_code == 200
+    item = body.json()
+    assert item["dump"]["image"] == "Assembly-CSharp.dll"
+    assert item["dump"]["fields"][0]["offset"] == 16
+    assert item["methods"][0]["rva"] > 0
 
 
 def test_protocol_rebuild(client):

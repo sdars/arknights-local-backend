@@ -262,7 +262,11 @@ def _gates(metadata, artifacts, report):
     lib_ok = artifacts["libil2cpp"]["exists"] and artifacts["libil2cpp"]["valid"]
     raw_ok = artifacts["raw_metadata"]["exists"]
     decrypted_ok = metadata["state"] in ("已解密", "标准 metadata")
-    dump_ok = artifacts["dump_cs"]["exists"] and artifacts["stringliteral"]["exists"]
+    dump_ok = (
+        artifacts["dump_cs"]["exists"]
+        and artifacts["stringliteral"]["exists"]
+        and artifacts["script_json"]["exists"]
+    )
     tests_ok = bool(report) and report["tests"] > 0 and not report["failed"] and not report["errors"]
     return [
         {
@@ -282,7 +286,7 @@ def _gates(metadata, artifacts, report):
             "label": "Il2CppDumper 导出",
             "state": "done" if dump_ok else "pending",
             "detail": (
-                "dump.cs + stringliteral.json 已生成"
+                "dump.cs + stringliteral.json + script.json 已生成"
                 if dump_ok
                 else "protocol_catalog.json 已生成；完整 dump.cs 等待 CodeRegistration/MetadataRegistration"
                 if artifacts["protocol_catalog"]["exists"]

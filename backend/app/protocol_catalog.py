@@ -94,6 +94,7 @@ def _newest(pattern):
 def rebuild_from_memory_dump():
     metadata = _newest("tmp/逆向分析/**/global-metadata.decrypted.dat")
     lib = _newest("tmp/逆向分析/**/libil2cpp.so")
+    dump = _newest("tmp/逆向分析/**/dump.cs")
     if not metadata:
         return {"ok": False, "output": "未找到 global-metadata.decrypted.dat", "catalog": summary()}
     script = ROOT / "scripts" / "extract_protocol_catalog.py"
@@ -104,10 +105,22 @@ def rebuild_from_memory_dump():
         proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=180, check=False)
         output = (proc.stdout + proc.stderr).strip()
         rc = proc.returncode
+        if rc == 0 and dump:
+            enrich = ROOT / "scripts" / "enrich_protocol_catalog_from_dump.py"
+            proc = subprocess.run(
+                [sys.executable, str(enrich), "--catalog", str(CATALOG_PATH), "--dump", str(dump)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+            output += "\n" + (proc.stdout + proc.stderr).strip()
+            rc = proc.returncode
     except Exception as exc:
         rc = 124
         output = str(exc)
     REBUILD_LOG.parent.mkdir(parents=True, exist_ok=True)
-    REBUILD_LOG.write_text(f"rc={rc}\nmetadata={metadata}\nlib={lib}\n{output}\n", encoding="utf-8")
+    REBUILD_LOG.write_text(f"rc={rc}\nmetadata={metadata}\nlib={lib}\ndump={dump}\n{output}\n", encoding="utf-8")
     invalidate()
     return {"ok": rc == 0, "rc": rc, "output": output, "catalog": summary()}

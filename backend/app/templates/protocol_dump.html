@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set active = 'protocol' %}
+{% block title %}dump.cs 全量索引 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">IL2CPP DUMP</p><h1>dump.cs 全量索引</h1></div>
+  <a class="btn" href="/admin/protocol">返回协议索引</a>
+</header>
+
+{% if summary.exists %}
+<section class="cards">
+  <div class="card"><span class="muted">类型</span><strong>{{ summary.type_count }}</strong></div>
+  <div class="card"><span class="muted">方法 RVA</span><strong>{{ summary.method_count }}</strong></div>
+  <div class="card"><span class="muted">程序集</span><strong>{{ summary.image_count }}</strong></div>
+  <div class="card"><span class="muted">字符串</span><strong>{{ summary.stringliteral.count }}</strong></div>
+</section>
+
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>导出工件</h2><span class="muted mono">{{ summary.sha256[:16] }}…</span></div>
+  <div class="policy-grid">
+    <div><strong>dump.cs</strong><span class="mono">{{ summary.size_human }} · {{ summary.lines }} 行</span></div>
+    <div><strong>stringliteral.json</strong><span class="mono">{{ summary.stringliteral.count }} 条 · {{ (summary.stringliteral.size / 1024 / 1024)|round(1) }} MB</span></div>
+    <div><strong>script.json</strong><span class="mono">{{ summary.script.methods }} 个地址 · {{ (summary.script.size / 1024 / 1024)|round(1) }} MB</span></div>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/admin/protocol/dump/file?kind=dump">下载 dump.cs</a>
+    <a class="btn" href="/admin/protocol/dump/file?kind=stringliteral">下载字符串表</a>
+    <a class="btn" href="/admin/protocol/dump/file?kind=script">下载 script.json</a>
+  </div>
+  <p class="muted mono">{{ summary.path }}</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>搜索类型 / 字段 / 方法</h2><span class="muted">{{ total }} 条匹配</span></div>
+  <form class="filter-form" method="get" action="/admin/protocol/dump">
+    <input name="q" value="{{ q }}" placeholder="LoginRequest、SyncData、getToken、字段名…">
+    <button type="submit">搜索 dump.cs</button>
+  </form>
+  <table class="table">
+    <thead><tr><th>行</th><th>类型</th><th>种类</th><th>内容</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td class="mono">{{ row.line }}</td>
+        <td class="mono">{% if row.kind == 'type' %}<a href="/admin/protocol/dump/type?name={{ row.type|urlencode }}">{{ row.type }}</a>{% else %}{{ row.type }}{% endif %}</td>
+        <td><span class="gate g-{{ 'done' if row.kind == 'type' else 'pending' }}">{{ row.kind }}</span></td>
+        <td class="mono">{{ row.text[:240] }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">{% if q %}没有匹配{% else %}输入关键字开始搜索{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="panel"><p class="muted">{{ summary.detail or '未找到 dump.cs' }}</p></section>
+{% endif %}
+{% endblock %}

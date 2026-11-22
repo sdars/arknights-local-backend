@@ -12,6 +12,7 @@
   <div class="card"><span class="muted">协议类型</span><strong>{{ catalog.counts.protocol_types or 0 }}</strong></div>
   <div class="card"><span class="muted">Request/Response 明细</span><strong>{{ catalog.detailed_types or 0 }}</strong></div>
   <div class="card"><span class="muted">全量类型</span><strong>{{ catalog.counts.types or 0 }}</strong></div>
+  <div class="card"><span class="muted">已回填 RVA</span><strong>{{ catalog.counts.dump_enriched_types or 0 }}</strong></div>
 </section>
 
 <section class="panel accent-panel">
@@ -29,6 +30,26 @@
     {% if request.query_params.get('rebuilt') == '1' %}<span class="gate g-done">索引已重建</span>{% endif %}
     {% if request.query_params.get('rebuilt') == '0' %}<span class="gate g-failed">重建失败，检查 logs/catalog-rebuild.log</span>{% endif %}
   </div>
+</section>
+
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>全量 Il2CppDumper 导出</h2><span class="muted mono">{{ dump.sha256[:16] if dump.exists and dump.sha256 else '未生成' }}…</span></div>
+  {% if dump.exists %}
+  <div class="cards">
+    <div class="card"><span class="muted">dump 类型</span><strong>{{ dump.type_count }}</strong></div>
+    <div class="card"><span class="muted">方法 RVA</span><strong>{{ dump.method_count }}</strong></div>
+    <div class="card"><span class="muted">程序集</span><strong>{{ dump.image_count }}</strong></div>
+    <div class="card"><span class="muted">字符串</span><strong>{{ dump.stringliteral.count }}</strong></div>
+  </div>
+  <p class="muted mono">{{ dump.path }} · {{ dump.size_human }} · {{ dump.lines }} 行</p>
+  <div class="actions">
+    <a class="btn primary" href="/admin/protocol/dump">搜索 dump.cs</a>
+    <a class="btn" href="/admin/protocol/dump?q=Request">Request 类型</a>
+    <a class="btn" href="/admin/protocol/dump/file?kind=dump">下载 dump.cs</a>
+  </div>
+  {% else %}
+  <p class="muted">{{ dump.detail or 'dump.cs 尚未生成' }}</p>
+  {% endif %}
 </section>
 
 <section class="panel">

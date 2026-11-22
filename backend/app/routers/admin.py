@@ -13,6 +13,7 @@ from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
 from .. import selfcheck
 from .. import protocol_catalog
+from .. import il2cpp_dump
 
 router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -189,6 +190,7 @@ async def protocol_page(request: Request, q: str = "", kind: str = "", limit: in
     catalog = protocol_catalog.summary()
     routes, route_total = protocol_catalog.search_routes(q, kind, limit)
     types, type_total = protocol_catalog.search_types(q, limit=60)
+    dump = await run_in_threadpool(il2cpp_dump.summary)
     return templates.TemplateResponse(
         request,
         "protocol.html",
@@ -199,6 +201,7 @@ async def protocol_page(request: Request, q: str = "", kind: str = "", limit: in
             "route_total": route_total,
             "types": types,
             "type_total": type_total,
+            "dump": dump,
             "q": q,
             "kind": kind,
             "limit": limit,
@@ -235,6 +238,91 @@ async def protocol_type(request: Request, name: str = ""):
         {"admin": admin_name(request), "item": item, "name": name},
         status_code=200 if item else 404,
     )
+
+
+@router.get("/protocol/type/api")
+async def protocol_type_api(request: Request, name: str = ""):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    item = protocol_catalog.get_type(name)
+    if not item:
+        return JSONResponse({"error": "type not found", "name": name}, status_code=404)
+    return JSONResponse(item)
+
+
+@router.get("/protocol/dump", response_class=HTMLResponse)
+async def protocol_dump_page(request: Request, q: str = "", limit: int = 80):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    summary = await run_in_threadpool(il2cpp_dump.summary)
+    rows, total = ([], 0)
+    if q.strip():
+        rows, total = await run_in_threadpool(il2cpp_dump.search, q, limit)
+    return templates.TemplateResponse(
+        request,
+        "protocol_dump.html",
+        {"admin": admin_name(request), "summary": summary, "rows": rows, "total": total, "q": q},
+    )
+
+
+@router.get("/protocol/dump/api")
+async def protocol_dump_api(request: Request, q: str = "", limit: int = 80):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    summary = await run_in_threadpool(il2cpp_dump.summary)
+    rows, total = ([], 0)
+    if q.strip():
+        rows, total = await run_in_threadpool(il2cpp_dump.search, q, limit)
+    return JSONResponse(
+        {
+            "summary": summary,
+            "query": q,
+            "total": total,
+            "results": rows,
+        }
+    )
+
+
+@router.get("/protocol/dump/type", response_class=HTMLResponse)
+async def protocol_dump_type(request: Request, name: str = ""):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    item = await run_in_threadpool(il2cpp_dump.get_type, name)
+    return templates.TemplateResponse(
+        request,
+        "protocol_dump_type.html",
+        {"admin": admin_name(request), "item": item, "name": name},
+        status_code=200 if item else 404,
+    )
+
+
+@router.get("/protocol/dump/file")
+async def protocol_dump_file(request: Request, kind: str = "dump"):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    summary = await run_in_threadpool(il2cpp_dump.summary)
+    if not summary.get("exists"):
+        return JSONResponse({"error": "dump.cs not found"}, status_code=404)
+    if kind == "stringliteral":
+        path = il2cpp_dump.dump_path().parent / "stringliteral.json"
+        media_type = "application/json"
+        filename = "stringliteral.json"
+    elif kind == "script":
+        path = il2cpp_dump.dump_path().parent / "script.json"
+        media_type = "application/json"
+        filename = "script.json"
+    else:
+        path = il2cpp_dump.dump_path()
+        media_type = "text/plain; charset=utf-8"
+        filename = "dump.cs"
+    if not path.exists():
+        return JSONResponse({"error": f"{filename} not found"}, status_code=404)
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 @router.post("/protocol/rebuild")

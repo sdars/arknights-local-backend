@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% set active = 'protocol' %}
+{% block title %}{{ name }} · dump.cs{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">IL2CPP TYPE</p><h1 class="mono">{{ item.name if item else name }}</h1></div>
+  <a class="btn" href="/admin/protocol/dump?q={{ name|urlencode }}">返回搜索</a>
+</header>
+{% if item %}
+<section class="cards">
+  <div class="card"><span class="muted">TypeDefIndex</span><strong>{{ item.type_def_index }}</strong></div>
+  <div class="card"><span class="muted">程序集</span><strong class="small">{{ item.image }}</strong></div>
+  <div class="card"><span class="muted">起始行</span><strong>{{ item.line }}</strong></div>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>dump.cs 原始片段</h2>{% if item.truncated %}<span class="gate g-pending">已截断</span>{% endif %}</div>
+  <pre class="mono" style="overflow:auto;max-height:72vh;white-space:pre-wrap">{{ item.text }}</pre>
+</section>
+{% else %}
+<section class="panel"><p class="muted">未找到类型：{{ name }}</p></section>
+{% endif %}
+{% endblock %}
