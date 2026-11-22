@@ -90,12 +90,16 @@ ensure_backend() {
     return 0
   fi
   log "backend unhealthy, restarting"
-  pkill -f '/root/Knight/.venv/bin/python run.py' 2>/dev/null || true
-  sleep 1
-  (
-    cd backend
-    ARK_HOST="${ARK_HOST:-0.0.0.0}" ARK_PORT="$SERVER_HTTP_PORT" nohup setsid ./start.sh > server.log 2>&1 < /dev/null &
-  )
+  if systemctl list-unit-files ark-backend.service 2>/dev/null | grep -q '^ark-backend\.service'; then
+    systemctl restart ark-backend.service 2>/dev/null || true
+  else
+    pkill -f '/root/Knight/.venv/bin/python run.py' 2>/dev/null || true
+    sleep 1
+    (
+      cd backend
+      ARK_HOST="${ARK_HOST:-0.0.0.0}" ARK_PORT="$SERVER_HTTP_PORT" nohup setsid ./start.sh > server.log 2>&1 < /dev/null &
+    )
+  fi
   for _ in 1 2 3 4 5; do
     if curl -sf -m 3 "http://127.0.0.1:${SERVER_HTTP_PORT}/healthz" >/dev/null 2>&1; then
       log "backend restarted"
@@ -112,16 +116,20 @@ ensure_mitm() {
     return 0
   fi
   log "TLS reverse proxy unhealthy, restarting"
-  pkill -f 'mitmdump.*reverse:http://127.0.0.1:8443' 2>/dev/null || true
-  sleep 1
-  (
-    cd bridge
-    nohup setsid /root/Knight/.venv/bin/mitmdump \
-      --mode reverse:http://127.0.0.1:8443 \
-      --listen-host 127.0.0.1 --listen-port 4443 \
-      -w "flows/reverse-$(date +%Y%m%d-%H%M%S).mitm" \
-      > reverse.log 2>&1 < /dev/null &
-  )
+  if systemctl list-unit-files ark-mitm.service 2>/dev/null | grep -q '^ark-mitm\.service'; then
+    systemctl restart ark-mitm.service 2>/dev/null || true
+  else
+    pkill -f 'mitmdump.*reverse:http://127.0.0.1:8443' 2>/dev/null || true
+    sleep 1
+    (
+      cd bridge
+      nohup setsid /root/Knight/.venv/bin/mitmdump \
+        --mode reverse:http://127.0.0.1:8443 \
+        --listen-host 127.0.0.1 --listen-port 4443 \
+        -w "flows/reverse-$(date +%Y%m%d-%H%M%S).mitm" \
+        > reverse.log 2>&1 < /dev/null &
+    )
+  fi
   for _ in 1 2 3 4 5; do
     if ss -ltn 2>/dev/null | grep -q ':4443 '; then
       log "TLS reverse proxy restarted"

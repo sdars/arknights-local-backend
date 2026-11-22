@@ -1,14 +1,17 @@
+import asyncio
 import json
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..config import APP_DIR, SERVER_NAME, CLIENT_VERSION, RES_VERSION
 from ..db import connect, get_setting, set_setting, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
+from .. import selfcheck
 
 router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -53,6 +56,8 @@ async def dashboard(request: Request):
     stats = account_stats()
     accounts = list_accounts()[-8:]
     logs = recent_logs(12)
+    development = await run_in_threadpool(selfcheck.collect_status)
+    gate_done = sum(1 for gate in development["gates"] if gate["state"] == "done")
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -64,6 +69,8 @@ async def dashboard(request: Request):
             "server_name": get_setting("server_name", SERVER_NAME),
             "client_version": CLIENT_VERSION,
             "res_version": RES_VERSION,
+            "development": development,
+            "gate_done": gate_done,
         },
     )
 
@@ -157,6 +164,41 @@ async def logs_page(request: Request):
     return templates.TemplateResponse(
         request, "logs.html", {"admin": admin_name(request), "logs": recent_logs(500)}
     )
+
+
+@router.get("/development", response_class=HTMLResponse)
+async def development_page(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    status = await run_in_threadpool(selfcheck.collect_status, True)
+    gate_done = sum(1 for gate in status["gates"] if gate["state"] == "done")
+    return templates.TemplateResponse(
+        request,
+        "development.html",
+        {"admin": admin_name(request), "status": status, "gate_done": gate_done},
+    )
+
+
+@router.post("/development/run-tests")
+async def development_run_tests(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    if not selfcheck.protocol_tests_running():
+        asyncio.create_task(run_in_threadpool(selfcheck.run_protocol_tests))
+    return RedirectResponse("/admin/development", status_code=303)
+
+
+@router.get("/development/catalog.json")
+async def development_catalog(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    path = selfcheck.artifact_path("protocol_catalog")
+    if not path:
+        return JSONResponse({"error": "protocol_catalog.json not found"}, status_code=404)
+    return FileResponse(path, media_type="application/json", filename="protocol_catalog.json")
 
 
 @router.get("/settings", response_class=HTMLResponse)

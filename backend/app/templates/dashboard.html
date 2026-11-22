@@ -14,6 +14,15 @@
   <div class="card"><span class="muted">客户端版本</span><strong class="small">{{ client_version }}</strong></div>
 </section>
 
+<section class="panel mode-banner">
+  <div>
+    <p class="eyebrow">DEVELOPMENT MODE</p>
+    <h2>{{ development.mode }}</h2>
+    <p class="muted">{{ development.screenshot_policy }}。阶段门禁 {{ gate_done }}/5 已通过。</p>
+  </div>
+  <a class="btn" href="/admin/development">查看研发状态</a>
+</section>
+
 <section class="grid-2">
   <div class="panel">
     <div class="panel-head"><h2>服务信息</h2></div>

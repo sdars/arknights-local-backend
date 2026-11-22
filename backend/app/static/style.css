@@ -89,6 +89,27 @@ button.link { border: 0; background: none; padding: 0; color: var(--muted); }
 .form { display: grid; gap: 14px; max-width: 640px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .danger-zone { border-color: #3a2225; }
+.mode-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.mode-banner h2 { margin: 0 0 8px; font-size: 20px; color: var(--gold-2); }
+.mode-banner p { margin: 0; }
+.mode-value { font-size: 19px !important; line-height: 1.35; }
+.unit { color: var(--muted); font-size: 16px; font-weight: 500; }
+.accent-panel { border-color: #4a3b20; background: linear-gradient(135deg, #191710, var(--panel) 56%); }
+.policy-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 4px 0 16px; }
+.policy-grid div { border-left: 2px solid var(--gold); padding-left: 14px; }
+.policy-grid strong { display: block; margin-bottom: 7px; }
+.policy-grid span { color: var(--muted); font-size: 13px; line-height: 1.65; }
+.policy-note { margin: 0; font-size: 12px; }
+.gate { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.g-done { color: var(--green); background: #102016; }
+.g-pending, .g-manual, .g-not_run { color: var(--gold-2); background: #221d12; }
+.g-blocked, .g-failed, .g-error { color: var(--red); background: #241315; }
+.g-skipped { color: var(--muted); background: #1b2027; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 8px; }
+.dot.ok { background: var(--green); box-shadow: 0 0 8px rgba(106,194,141,.5); }
+.dot.bad { background: var(--red); }
+.test-actions { margin-bottom: 14px; }
+.logbox { margin: 0; max-height: 330px; overflow: auto; padding: 14px; background: #0a0c0f; border: 1px solid var(--line); color: #bfc7d1; font: 12px/1.6 "JetBrains Mono", Consolas, monospace; white-space: pre-wrap; }
 @media (max-width: 900px) {
   .layout { display: block; }
   .sidebar { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 14px; }
@@ -97,6 +118,8 @@ button.link { border: 0; background: none; padding: 0; color: var(--muted); }
   .main { padding: 24px; }
   .cards, .grid-2 { grid-template-columns: 1fr 1fr; }
   .inline-form { grid-template-columns: 1fr; }
+  .policy-grid { grid-template-columns: 1fr; }
+  .mode-banner { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 560px) { .cards, .grid-2 { grid-template-columns: 1fr; } }
 

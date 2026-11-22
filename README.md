@@ -34,6 +34,18 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 配置与资源：`network_config`、`remote_config`、版本接口、`/assetbundle/official/...`（302 回源到官方 CDN）
 - Web UI：仪表盘、账号管理（新建 / 编辑 / 封禁 / 重置 Token / 删除）、请求日志、服务设置
 
+## 开发模式
+
+自 2026-11-22 起默认切换到「静态逆向 + 无头协议测试」：
+
+- APK / 设备内存提取 `libil2cpp.so` 与 `global-metadata.dat`，用 Il2CppDumper 导出 `dump.cs`、`stringliteral.json`、`script.json`；
+- pytest 直接模拟客户端请求，验证鉴权 Header、响应结构、SQLite 状态变化；
+- 截图不再作为探索或验收手段；真机只在阶段末做一次日志级联调（`request_logs` + `adb logcat`）。
+
+Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`，同步显示门禁、逆向产物、协议测试矩阵与日志。详细流程见 `docs/静态逆向与无头测试.md`。
+
+当前逆向产物：`tmp/逆向分析/2026-11-22/global-metadata.decrypted.dat`（运行内存 dump，v29）和 `backend/data/protocol_catalog.json`（507 路由 / 50,548 类型 / 7,197 协议类型 / 1,561 个 Request/Response 明细）。
+
 ## 已验证
 
 - `GET /healthz` → 200
@@ -59,6 +71,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 
 ```bash
 /root/Knight/.venv/bin/pip install -r backend/requirements.txt
+/root/Knight/.venv/bin/pip install -r backend/requirements-dev.txt
 /root/Knight/.venv/bin/pip install mitmproxy
 ```
 

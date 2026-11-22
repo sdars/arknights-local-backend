@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% set active = 'development' %}
+{% block title %}研发状态 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">PROTOCOL LAB</p><h1>研发状态</h1></div>
+  <span class="pill">无头模式</span>
+</header>
+
+<section class="cards">
+  <div class="card"><span class="muted">当前模式</span><strong class="mode-value">{{ status.mode }}</strong></div>
+  <div class="card"><span class="muted">协议测试</span><strong class="small">{{ status.report_summary }}</strong></div>
+  <div class="card"><span class="muted">metadata</span><strong class="small">{{ status.metadata.state }}</strong></div>
+  <div class="card"><span class="muted">静态协议索引</span><strong class="small">{{ status.catalog.routes }} 路由</strong></div>
+</section>
+
+<section class="panel accent-panel">
+  <div class="panel-head"><h2>执行约定</h2><span class="muted mono">{{ status.generated_at }}</span></div>
+  <div class="policy-grid">
+    <div><strong>静态优先</strong><span>从 libil2cpp.so / global-metadata.dat 提取路由、类型与字段，不靠 UI 点击猜接口。</span></div>
+    <div><strong>无头验收</strong><span>pytest 直接发包，断言响应、状态变化、SQLite 持久化；不截图。</span></div>
+    <div><strong>阶段末真机</strong><span>仅在每组测试全绿后启动客户端，查 request_logs 与 adb logcat，不截图。</span></div>
+  </div>
+  <p class="muted policy-note">{{ status.screenshot_policy }}。历史截图只保留为证据。</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>阶段门禁</h2><span class="muted">{{ gate_done }}/5 已通过 · 静态逆向 → 无头测试 → 日志联调</span></div>
+  <table class="table">
+    <thead><tr><th>阶段</th><th>状态</th><th>说明</th></tr></thead>
+    <tbody>
+    {% for gate in status.gates %}
+      <tr>
+        <td>{{ gate.label }}</td>
+        <td><span class="gate g-{{ gate.state }}">{{ {'done':'已通过','pending':'待执行','blocked':'阻塞','failed':'失败','manual':'手动'}.get(gate.state, gate.state) }}</span></td>
+        <td class="muted">{{ gate.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>协议索引</h2><a href="/admin/development/catalog.json">下载 JSON</a></div>
+  <div class="policy-grid">
+    <div><strong>{{ status.catalog.routes }}</strong><span>可从字符串表定位的后端路由</span></div>
+    <div><strong>{{ status.catalog.protocol_types }}</strong><span>协议相关类型（Request / Response / SDK / Network）</span></div>
+    <div><strong>{{ status.catalog.types }}</strong><span>全量类型定义；Request/Response 已展开字段与方法</span></div>
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>服务</h2></div>
+    <dl class="kv">
+      {% for svc in status.services %}
+      <dt>{{ svc.label }}</dt><dd><span class="dot {{ 'ok' if svc.active else 'bad' }}"></span>{{ svc.state }}</dd>
+      {% endfor %}
+      <dt>healthz</dt><dd>{{ status.backend.detail }}</dd>
+    </dl>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>设备链路</h2></div>
+    <dl class="kv">
+      <dt>ADB</dt><dd class="mono">{{ status.adb.serial or '-' }} · {{ status.adb.state }}</dd>
+      <dt>reverse</dt><dd class="mono">{{ status.adb.reverse|join(' | ') or '-' }}</dd>
+      <dt>HTTP proxy</dt><dd class="mono">{{ status.adb.proxy or '-' }}</dd>
+      <dt>443 → 8444</dt><dd>{{ '正常' if status.adb.https_forward else '未检测到' }}</dd>
+    </dl>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>逆向产物</h2><span class="muted">最新文件</span></div>
+  <table class="table">
+    <thead><tr><th>产物</th><th>状态</th><th>大小</th><th>修改时间</th><th>路径</th></tr></thead>
+    <tbody>
+    {% for key, item in status.artifacts.items() %}
+      <tr>
+        <td>{{ item.label }}</td>
+        <td><span class="gate {{ 'g-done' if item.exists and item.valid else ('g-failed' if item.exists else 'g-pending') }}">{{ '已生成' if item.exists and item.valid else ('损坏' if item.exists else '缺失') }}</span></td>
+        <td class="mono">{{ item.size_human or '-' }}</td>
+        <td class="mono">{{ item.mtime or '-' }}</td>
+        <td class="mono">{{ item.path or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>协议测试矩阵</h2><span class="muted">{{ status.report_summary }}</span></div>
+  <div class="actions test-actions">
+    <form method="post" action="/admin/development/run-tests">
+      <button class="primary" type="submit" {% if status.tests_running %}disabled{% endif %}>
+        {{ '测试运行中…' if status.tests_running else '运行无头协议测试' }}
+      </button>
+    </form>
+    <span class="muted">JUnit：{% if status.report %}{{ status.report.mtime }} · {{ status.report.time }}s{% else %}尚未生成{% endif %}</span>
+  </div>
+  <table class="table">
+    <thead><tr><th>阶段</th><th>方法</th><th>路径</th><th>用例</th><th>结果</th></tr></thead>
+    <tbody>
+    {% for row in status.protocol_matrix %}
+      <tr>
+        <td>{{ row.stage }}</td><td class="mono">{{ row.method }}</td><td class="mono">{{ row.path }}</td>
+        <td class="mono">{{ row.test }}</td>
+        <td><span class="gate g-{{ row.status if row.status != 'not_run' else 'pending' }}">{{ {'passed':'通过','failed':'失败','error':'错误','skipped':'跳过','not_run':'未运行'}.get(row.status, row.status) }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>测试日志</h2></div>
+    <pre class="logbox">{{ status.test_log_tail or '暂无测试日志' }}</pre>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>watchdog 日志</h2></div>
+    <pre class="logbox">{{ status.watchdog_tail or '暂无 watchdog 日志' }}</pre>
+  </div>
+</section>
+{% endblock %}
