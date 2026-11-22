@@ -98,11 +98,14 @@
       <dt>应用域 DNAT</dt><dd>{{ status.adb.local_route_count }} 条 · {{ '正常' if status.adb.local_route_ok else '需修复' }}</dd>
       <dt>设备 → 后端</dt><dd>{{ '正常' if status.adb.device_backend_ok else '失败' }}</dd>
       <dt>应用 UID → launcher TLS</dt><dd title="{{ status.adb.app_tls_detail }}">{{ '正常' if status.adb.app_tls_ok else '失败' }}</dd>
+      <dt>SDK 信封</dt><dd title="{{ status.sdk_gateway.detail }}">{{ '正常' if status.sdk_gateway.envelope_ok else '失败' }}</dd>
+      <dt>过期 Token 自愈</dt><dd title="{{ status.sdk_gateway.detail }}">{{ '正常' if status.sdk_gateway.token_heal_ok else '失败' }}</dd>
     </dl>
     <div class="actions">
       <form method="post" action="/admin/development/repair-adb"><button class="primary" type="submit">修复 ADB 链路</button></form>
       <a class="btn" href="/admin/development/adb.json">ADB JSON</a>
     </div>
+    <p class="muted policy-note">SDK 入口在反向代理内按路径命中，不再依赖被改写后的 Host；basic / grant 强制返回 HGSDK 字符串信封，过期 token 自动回退到本机账号。</p>
   </div>
 </section>
 

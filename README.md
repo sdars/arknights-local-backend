@@ -59,10 +59,12 @@ Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`�
 - `POST /account/syncData` → 200，返回完整 `user`（约 605 KB）
 - `POST /quest/battleStart` → 200，返回 `battleId`
 - Web UI 登录 `sdars / 123456` → 303 → `/admin` → 200；用户控制台 `/admin/accounts/10000000`、邮件中心 `/admin/mail`、服务与更新 `/admin/settings` 均 200
-- 无头协议测试：`49 passed`，覆盖用户控制台写回、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由
+- 无头协议测试：`50 passed`，覆盖用户控制台写回、邮件领取幂等、编队协议、强制更新、维护模式、资源本地命中/HEAD 与 302 回源，以及 ADB 应用 UID 的 launcher TLS 本地路由和反向层 HGSDK 信封 / 过期 token 自愈
 - 客户端侧：登录链路已走到 `syncData`，并曾进入游戏主界面 / 签到页 / 干员页
 
 > 2026-11-22 修复：`/account/syncData` 现在同时刷新 `status.lastOnlineTs` 和 `status.lastRefreshTs`。此前只刷新前者，客户端会用旧的刷新时间做身份同步校验并弹出“同步身份信息失败 / 错误号 200”。修复后真实客户端登录直接进入签到页，未再弹窗。
+
+> 2026-11-23 二次修复：错误号 200 也是 HGSDK 的 `RESPONSE_ERROR`。mitm reverse 模式下按路径拦截 `basic` / `grant`，统一返回 `data` 字符串信封；缓存 token 过期时自动回退到 `.env` 的本地账号，真机冷启动登录链全部 200。
 
 ## 快速开始
 

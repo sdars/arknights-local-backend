@@ -3,11 +3,13 @@ import json
 import os
 import re
 import subprocess
+import ssl
 import struct
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 from urllib.request import urlopen
 from xml.etree import ElementTree as ET
 
@@ -43,6 +45,7 @@ ARTIFACT_LABELS = {
 
 _CACHE = {"ts": 0.0, "data": None}
 _ADB_PROBE_CACHE = {"ts": 0.0, "data": None}
+_SDK_GATEWAY_CACHE = {"ts": 0.0, "data": None}
 
 PROTOCOL_ENDPOINTS = [
     {"stage": "SDK", "method": "GET", "path": "/app/v1/config", "test": "test_sdk_config", "desc": "应用配置"},
@@ -50,6 +53,7 @@ PROTOCOL_ENDPOINTS = [
     {"stage": "SDK", "method": "GET", "path": "/api/remote_config/1/prod/default/Android/network_config", "test": "test_network_config", "desc": "网络配置"},
     {"stage": "SDK", "method": "GET", "path": "/user/info/v1/basic", "test": "test_basic", "desc": "账号基础信息"},
     {"stage": "SDK", "method": "POST", "path": "/user/oauth2/v2/grant", "test": "test_grant", "desc": "OAuth grant"},
+    {"stage": "SDK", "method": "GET", "path": "bridge:/user/info/v1/basic", "test": "test_bridge_sdk_envelope_and_stale_token_self_heal", "desc": "反向层 HGSDK 信封与过期 token 自愈"},
     {"stage": "SDK", "method": "POST", "path": "/u8/user/v1/getToken", "test": "test_u8_get_token", "desc": "U8 渠道 token"},
     {"stage": "SDK", "method": "POST", "path": "/u8/pay/getAllProductList", "test": "test_product_list", "desc": "商品列表"},
     {"stage": "登录", "method": "POST", "path": "/account/login", "test": "test_account_login", "desc": "游戏登录"},
@@ -220,11 +224,51 @@ def _adb_status(detailed=False):
 
 
 def adb_diagnostics():
-    return _adb_status(detailed=True)
+    result = _adb_status(detailed=True)
+    result["sdk_gateway"] = _sdk_gateway_status()
+    return result
+
+
+def _sdk_gateway_status():
+    now = time.time()
+    if _SDK_GATEWAY_CACHE["data"] is not None and now - _SDK_GATEWAY_CACHE["ts"] < 10:
+        return _SDK_GATEWAY_CACHE["data"]
+    expected_uid = str(_env_value("ARK_UID", "10000000"))
+    configured_token = _env_value("ARK_TOKEN", "lab_manual_token")
+    context = ssl._create_unverified_context()
+
+    def probe(token):
+        query = urlencode({"token": token})
+        url = f"https://127.0.0.1:4443/user/info/v1/basic?{query}"
+        with urlopen(url, context=context, timeout=4) as response:
+            envelope = json.loads(response.read().decode("utf-8"))
+        if int(envelope.get("status", -1)) != 0:
+            return False, f"envelope status={envelope.get('status')}"
+        data = envelope.get("data")
+        if not isinstance(data, str):
+            return False, "data 不是字符串"
+        data = json.loads(data)
+        if not isinstance(data, dict):
+            return False, "data 不是对象"
+        if str(data.get("identityNum")) != expected_uid:
+            return False, f"identityNum={data.get('identityNum')} 期望 {expected_uid}"
+        return True, "status=0 / data 字符串 / identityNum 正确"
+
+    result = {"ok": False, "envelope_ok": False, "token_heal_ok": False, "detail": ""}
+    try:
+        result["envelope_ok"], envelope_detail = probe(configured_token)
+        result["token_heal_ok"], heal_detail = probe("__ark_stale_token__")
+        result["ok"] = result["envelope_ok"] and result["token_heal_ok"]
+        result["detail"] = f"正常 token: {envelope_detail}；过期 token: {heal_detail}"
+    except Exception as exc:
+        result["detail"] = str(exc)
+    _SDK_GATEWAY_CACHE.update(ts=now, data=result)
+    return result
 
 
 def repair_adb():
     _ADB_PROBE_CACHE.update(ts=0.0, data=None)
+    _SDK_GATEWAY_CACHE.update(ts=0.0, data=None)
     rc, output = _run([str(ROOT / "scripts" / "watchdog.sh")], timeout=60)
     return {"ok": rc == 0, "rc": rc, "output": output[-4000:]}
 
@@ -517,6 +561,7 @@ def collect_status(force=False):
         "services": services,
         "backend": _backend_status(services),
         "adb": _adb_status(detailed=force),
+        "sdk_gateway": _sdk_gateway_status(),
         "metadata": metadata,
         "artifacts": artifacts,
         "catalog": catalog,
