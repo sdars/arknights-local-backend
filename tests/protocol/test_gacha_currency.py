@@ -78,6 +78,99 @@ def test_ten_pull_permit_is_consumed_without_diamond_shard():
     assert user["status"]["diamondShard"] == 0
 
 
+def test_ten_pull_accepts_ten_single_tickets_from_client():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 0
+    user["status"]["gachaTicket"] = 10
+    result = gacha_service.draw(user, "NORM_79_0_4", count=10, use_tkt=5)
+    assert result["result"] == 0, result
+    assert user["status"]["gachaTicket"] == 0
+    assert user["status"]["diamondShard"] == 0
+    assert len(result["gachaResultList"]) == 10
+
+
+def test_ten_pull_accepts_combine_item_list_and_consumes_exact_counts():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 0
+    user["status"]["tenGachaTicket"] = 1
+    result = gacha_service.draw(
+        user,
+        "NORM_79_0_4",
+        count=10,
+        use_tkt=9,
+        item_list=[{"id": "7004", "count": 1}],
+    )
+    assert result["result"] == 0, result
+    assert user["status"]["tenGachaTicket"] == 0
+    assert user["status"]["diamondShard"] == 0
+
+
+def test_ten_pull_combines_single_tickets_and_ory():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 3000
+    user["status"]["gachaTicket"] = 5
+    result = gacha_service.draw(
+        user,
+        "NORM_79_0_4",
+        count=10,
+        use_tkt=9,
+        item_list=[{"id": "7003", "count": 5}, {"id": "4003", "count": 3000}],
+    )
+    assert result["result"] == 0, result
+    assert user["status"]["gachaTicket"] == 0
+    assert user["status"]["diamondShard"] == 0
+
+
+def test_classic_ten_ticket_and_classic_single_tickets_are_supported():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 0
+    user["status"]["classicTenGachaTicket"] = 1
+    result = gacha_service.draw(user, "CLASSIC_37_0_1", count=10, use_tkt=7)
+    assert result["result"] == 0, result
+    assert user["status"]["classicTenGachaTicket"] == 0
+
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 0
+    user["status"]["classicGachaTicket"] = 10
+    result = gacha_service.draw(user, "CLASSIC_37_0_1", count=10, use_tkt=8)
+    assert result["result"] == 0, result
+    assert user["status"]["classicGachaTicket"] == 0
+
+
+def test_combine_item_list_is_atomic_and_never_falls_back_to_ory():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 60000
+    user["status"]["tenGachaTicket"] = 1
+    result = gacha_service.draw(
+        user,
+        "NORM_79_0_4",
+        count=10,
+        use_tkt=9,
+        item_list=[{"id": "does_not_exist", "count": 1}, {"id": "7004", "count": 1}],
+    )
+    assert result["result"] == 5771
+    assert user["status"]["tenGachaTicket"] == 1
+    assert user["status"]["diamondShard"] == 60000
+
+
+def test_ticket_request_without_ticket_does_not_charge_diamond_shard():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 60000
+    user["status"]["classicTenGachaTicket"] = 0
+    result = gacha_service.draw(user, "CLASSIC_37_0_1", count=10, use_tkt=7)
+    assert result["result"] == 5771
+    assert user["status"]["diamondShard"] == 60000
+
+
+def test_single_ticket_item_id_is_consumed():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 0
+    user["status"]["gachaTicket"] = 1
+    result = gacha_service.draw(user, "NORM_79_0_4", count=1, use_tkt=1, item_id="7003")
+    assert result["result"] == 0, result
+    assert user["status"]["gachaTicket"] == 0
+
+
 def test_exchange_diamond_shard_uses_account_platform(client, login, test_account):
     _admin_login(client)
     uid = int(test_account["uid"])

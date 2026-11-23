@@ -367,6 +367,175 @@ def _take_consumable(user, item_id, amount=1):
     return True
 
 
+ITEM_STATUS_KEYS = {
+    "4003": "diamondShard",
+    "7003": "gachaTicket",
+    "7004": "tenGachaTicket",
+    "classic_gacha": "classicGachaTicket",
+    "classic_gacha_10": "classicTenGachaTicket",
+}
+
+
+def _normalize_item_list(item_list):
+    rows = []
+    for raw in item_list or []:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or raw.get("itemId") or "")
+        count = _int(raw.get("count"), 0)
+        if not item_id or count <= 0:
+            return []
+        rows.append((item_id, count))
+    return rows
+
+
+def _take_item(user, item_id, amount=1):
+    """Consume a client item id from the same stores the client reads.
+
+    Normal permits live in ``status``.  Event permits and other voucher-like
+    rewards are represented in both ``inventory`` and ``consumable``; keep
+    those two representations in sync while consuming either one.
+    """
+    item_id = str(item_id or "")
+    amount = max(0, _int(amount, 0))
+    if not item_id or amount <= 0:
+        return False
+    status_key = ITEM_STATUS_KEYS.get(item_id)
+    if status_key:
+        return _take_status(user, status_key, amount)
+    if _take_status(user, item_id, amount):
+        return True
+
+    inventory = user.get("inventory") or {}
+    consumable = user.get("consumable") or {}
+    inv_have = _int(inventory.get(item_id), 0)
+    slot = ((consumable.get(item_id) or {}).get("0") or {}) if isinstance(consumable, dict) else {}
+    con_have = _int(slot.get("count"), 0) if isinstance(slot, dict) else 0
+    if max(inv_have, con_have) < amount:
+        return False
+
+    # If inventory carries the item, inventory is authoritative.  The
+    # consumable entry is a second view of the same stack and must move with
+    # it.  When only the consumable view exists, use that instead.
+    if inv_have >= amount:
+        _take_inventory(user, item_id, amount)
+        if con_have:
+            _take_consumable(user, item_id, min(amount, con_have))
+        return True
+    if con_have >= amount:
+        _take_consumable(user, item_id, amount)
+        if inv_have:
+            _take_inventory(user, item_id, min(amount, inv_have))
+        return True
+    return False
+
+
+def _consume_item_list(user, item_list):
+    rows = _normalize_item_list(item_list)
+    if not rows:
+        return False, []
+    for item_id, count in rows:
+        if not _take_item(user, item_id, count):
+            return False, rows
+    return True, rows
+
+
+def _charge_diamond_shard(user, amount):
+    status = user.setdefault("status", {})
+    amount = max(0, _int(amount, 0))
+    if _int(status.get("diamondShard"), 0) < amount:
+        return False
+    status["diamondShard"] = _int(status.get("diamondShard"), 0) - amount
+    return True
+
+
+def _ticket_keys(pool_id):
+    classic = str(pool_id or "").startswith("CLASSIC")
+    if classic:
+        return "classicGachaTicket", "classicTenGachaTicket", "classic_gacha", "classic_gacha_10"
+    return "gachaTicket", "tenGachaTicket", "7003", "7004"
+
+
+def _charge_gacha(user, pool_id, count, use_tkt, item_id, item_list, price):
+    """Charge one advanced draw without silently changing the requested type.
+
+    The client uses every value of ``Torappu.GachaType``.  Treating only
+    1/2/4 as tickets (the previous behaviour) made a ten-pull permit look like
+    a failed Diamond pull.  Every explicit ticket type is now either consumed
+    or rejected; it never falls back to Orundum.
+    """
+    use_tkt = _int(use_tkt, 0)
+    if use_tkt < 0:
+        use_tkt = 0
+    _single_key, _ten_key, single_item, ten_item = _ticket_keys(pool_id)
+    rows = _normalize_item_list(item_list)
+
+    if use_tkt == 0:
+        if not _charge_diamond_shard(user, price):
+            return _error(5647, "not enough diamond shard")
+        return None
+
+    if count == 1:
+        if use_tkt in (1, 6):
+            requested = str(item_id or "")
+            ticket_item = requested if requested in {"7003", "classic_gacha"} else single_item
+            if not _take_item(user, ticket_item, 1):
+                return _error(5771, "gacha_tkt_state_error")
+            return None
+        if use_tkt == 3:
+            if item_id and _take_item(user, item_id, 1):
+                return None
+            limit = ((user.get("gacha") or {}).get("limit") or {}).get(str(pool_id))
+            if isinstance(limit, dict) and _int(limit.get("leastFree"), 0) > 0:
+                limit["leastFree"] = _int(limit.get("leastFree"), 0) - 1
+                return None
+            return _error(5771, "gacha_tkt_state_error")
+        if use_tkt == 4:
+            if not item_id or not _take_item(user, item_id, 1):
+                return _error(5771, "gacha_tkt_state_error")
+            return None
+        return _error(5771, "gacha_tkt_state_error")
+
+    # Ten-pull types: 2=TenTicket, 5=10xSingleTicket,
+    # 7=ClassicTenTicket, 8=10xClassicSingleTicket, 9=CombineTenTicket.
+    if use_tkt in (2, 7):
+        requested = str(item_id or "")
+        ticket_item = requested if requested in {"7004", "classic_gacha_10"} else ten_item
+        if not _take_item(user, ticket_item, 1):
+            return _error(5771, "gacha_tkt_state_error")
+        return None
+    if use_tkt in (5, 8):
+        requested = str(item_id or "")
+        ticket_item = requested if requested in {"7003", "classic_gacha"} else single_item
+        if not _take_item(user, ticket_item, 10):
+            return _error(5771, "gacha_tkt_state_error")
+        return None
+    if use_tkt == 9:
+        if not rows:
+            return _error(5771, "gacha_tkt_state_error")
+        ok, rows = _consume_item_list(user, item_list)
+        if not ok:
+            return _error(5771, "gacha_tkt_state_error")
+        # Prevent a malformed/truncated combine list from buying a ten-pull
+        # for a token amount.  Event-specific permits are intentionally
+        # treated as full-value because their ids are dynamic.
+        value = 0
+        full_value = False
+        for item_id, amount in rows:
+            if item_id == "4003":
+                value += amount
+            elif item_id == "7003" or item_id == "classic_gacha":
+                value += amount * max(1, _int(pool_meta(pool_id).get("singlePrice"), 600))
+            elif item_id == "7004" or item_id == "classic_gacha_10":
+                full_value = True
+            else:
+                full_value = True
+        if not full_value and value < price:
+            return _error(5771, "gacha_tkt_state_error")
+        return None
+    return _error(5771, "gacha_tkt_state_error")
+
+
 def _consume(user, key, amount):
     if _take_status(user, key, amount):
         return True
@@ -489,7 +658,7 @@ def _pool_state(user, pool_id, count):
     return gacha
 
 
-def draw(user, pool_id, count=1, use_tkt=0, item_id="", now=None):
+def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None):
     now = int(now or time.time())
     count = 10 if _int(count, 1) >= 10 else 1
     meta = pool_meta(pool_id)
@@ -503,33 +672,23 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", now=None):
     detail = pool_detail(pool_id)
     if not detail:
         return _error(5771, "卡池详情不可用")
-    status = user.setdefault("status", {})
     price = _int(meta.get("tenPrice" if count == 10 else "singlePrice"), 600 * count)
-    ticket_key = _status_key(pool_id, ten=(count == 10))
-    if count == 10:
-        consumed = False
-        if _int(use_tkt, 0) in (1, 2, 4):
-            if item_id and _consume(user, str(item_id), 1):
-                consumed = True
-            elif _consume(user, ticket_key, 1):
-                consumed = True
-        if not consumed:
-            if _int(status.get("diamondShard"), 0) < price:
-                return _error(5647, "not enough diamond shard")
-            status["diamondShard"] = _int(status.get("diamondShard"), 0) - price
-    else:
-        consumed = False
-        if _int(use_tkt, 0) in (1, 2, 4):
-            if item_id and _consume(user, str(item_id), 1):
-                consumed = True
-            elif _consume(user, ticket_key, 1):
-                consumed = True
-            if not consumed:
-                return _error(5771, "gacha_tkt_state_error")
-        else:
-            if _int(status.get("diamondShard"), 0) < price:
-                return _error(5647, "not enough diamond shard")
-            status["diamondShard"] = _int(status.get("diamondShard"), 0) - price
+    # Work on a detached copy so a bad/missing portion of a combine ticket
+    # list cannot consume the first item and then fail the draw half-way.
+    target = user
+    working = copy.deepcopy(user)
+    charge_error = _charge_gacha(
+        working,
+        pool_id,
+        count,
+        use_tkt,
+        item_id,
+        item_list,
+        price,
+    )
+    if charge_error:
+        return charge_error
+    user = working
     ex = user.setdefault("exgachadata", {})
     pity_key = _pity_key(pool_id)
     pity = _int(ex.get(pity_key), 0)
@@ -579,6 +738,11 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", now=None):
             if key in user
         },
     }
+    # Publish the staged mutation only after the whole draw succeeded.
+    # ``draw`` callers keep using their original player dictionary, while the
+    # route's save_player call sees the completed state.
+    target.clear()
+    target.update(working)
     response = {"result": 0, "playerDataDelta": delta}
     if count == 1:
         response["charGet"] = results[0]

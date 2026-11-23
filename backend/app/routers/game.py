@@ -1353,7 +1353,7 @@ async def gacha_advanced(request: Request):
         use_tkt=body.get("useTkt"),
         item_id=body.get("itemId") or "",
     )
-    logger.info(
+    logger.warning(
         "gacha single uid=%s body=%s result=%s error=%r",
         account["uid"], body, result.get("result"), result.get("error"),
     )
@@ -1380,8 +1380,9 @@ async def gacha_ten_advanced(request: Request):
         count=10,
         use_tkt=body.get("useTkt"),
         item_id=item_id,
+        item_list=item_list,
     )
-    logger.info(
+    logger.warning(
         "gacha ten uid=%s body=%s itemId=%r result=%s error=%r",
         account["uid"], body, item_id, result.get("result"), result.get("error"),
     )
