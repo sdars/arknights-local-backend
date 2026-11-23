@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "resource_picker.html" import picker %}
 {% set active = 'accounts' %}
 {% block title %}UID {{ account.uid }} · 用户控制台{% endblock %}
 {% macro number_field(name, label, value, minimum=0) %}
@@ -114,12 +115,11 @@
   <p class="muted small-note">物品类型会从 item_table 自动补齐；CHAR、CHAR_SKIN、PLAYER_AVATAR 等特殊资产请使用上方资产发放或下方干员发放。</p>
   <div class="table-wrap">
   <table class="table compact-table">
-    <thead><tr><th>ID</th><th>名称</th><th>类型</th><th>数量</th><th>修改</th></tr></thead>
+    <thead><tr><th>资源</th><th>类型</th><th>数量</th><th>修改</th></tr></thead>
     <tbody>
     {% for row in inventory_rows %}
       <tr>
-        <td class="mono">{{ row.id }}</td>
-        <td>{{ row.name }}</td>
+        <td>{{ row.name }}<div class="muted mono">{{ row.id }}</div></td>
         <td class="mono">{{ row.type }}</td>
         <td>{{ row.count }}</td>
         <td>
@@ -133,7 +133,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="5" class="muted">库存为空。可在上方写入物品。</td></tr>
+      <tr><td colspan="4" class="muted">库存为空。可在上方写入物品。</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -162,17 +162,17 @@
       <div class="panel-head"><h3>角色皮肤</h3><span class="muted">{{ skins|length }}</span></div>
       <div class="table-wrap short">
       <table class="table compact-table">
-        <thead><tr><th>ID</th><th>名称</th><th>干员</th><th></th></tr></thead>
+        <thead><tr><th>资源</th><th>干员</th><th></th></tr></thead>
         <tbody>
         {% for row in skins %}
           <tr>
-            <td class="mono">{{ row.id }}</td><td>{{ row.name }}</td><td class="mono">{{ row.charId }}</td>
+            <td>{{ row.name }}<div class="muted mono">{{ row.id }}</div></td><td class="mono">{{ row.charId }}</td>
             <td><form method="post" action="/admin/accounts/{{ account.uid }}/asset/remove">
               <input type="hidden" name="kind" value="skin"><input type="hidden" name="asset_id" value="{{ row.id }}">
               <button class="danger" type="submit">移除</button>
             </form></td>
           </tr>
-        {% else %}<tr><td colspan="4" class="muted">暂无皮肤</td></tr>{% endfor %}
+        {% else %}<tr><td colspan="3" class="muted">暂无皮肤</td></tr>{% endfor %}
         </tbody>
       </table>
       </div>
@@ -181,17 +181,17 @@
       <div class="panel-head"><h3>玩家头像</h3><span class="muted">{{ avatars|length }}</span></div>
       <div class="table-wrap short">
       <table class="table compact-table">
-        <thead><tr><th>ID</th><th>名称</th><th>类型</th><th></th></tr></thead>
+        <thead><tr><th>资源</th><th>类型</th><th></th></tr></thead>
         <tbody>
         {% for row in avatars %}
           <tr>
-            <td class="mono">{{ row.id }}</td><td>{{ row.name }}</td><td>{{ row.type }}</td>
+            <td>{{ row.name }}<div class="muted mono">{{ row.id }}</div></td><td>{{ row.type }}</td>
             <td><form method="post" action="/admin/accounts/{{ account.uid }}/asset/remove">
               <input type="hidden" name="kind" value="avatar"><input type="hidden" name="asset_id" value="{{ row.id }}">
               <button class="danger" type="submit">移除</button>
             </form></td>
           </tr>
-        {% else %}<tr><td colspan="4" class="muted">暂无头像</td></tr>{% endfor %}
+        {% else %}<tr><td colspan="3" class="muted">暂无头像</td></tr>{% endfor %}
         </tbody>
       </table>
       </div>
@@ -210,7 +210,7 @@
   {% for row in character_rows %}
     <article class="subpanel operator-card">
       <header>
-        <div><strong>{{ row.name }}</strong><span class="mono muted"> #{{ row.instId }} · {{ row.charId }}</span></div>
+        <div><strong>{{ row.name }}</strong><div class="mono muted">#{{ row.instId }} · {{ row.charId }}</div></div>
         <div class="actions">
           <span class="pill">Lv.{{ row.level }}</span>
           <form method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}/delete" onsubmit="return confirm('确定移除该干员？编队中的槽位会清空。')">
@@ -289,7 +289,11 @@
     <label>标题<input name="subject" placeholder="保留模板值"></label>
     <label>有效天数<input type="number" name="expire_days" placeholder="模板值"></label>
     <label class="span-all">正文<textarea name="content" rows="4" placeholder="留空使用模板正文"></textarea></label>
-    <label class="span-all">附件 JSON<textarea class="mono" name="items" rows="3" placeholder='[{"id":"4001","type":"GOLD","count":20000}]'></textarea></label>
+    <div class="span-all">
+      <div class="field-label">附件资源</div>
+      {{ picker([]) }}
+      <p class="muted small-note">按名称或 ID 搜索添加，留空则使用模板附件。</p>
+    </div>
     <div class="actions span-all"><button class="primary" type="submit">发送邮件</button></div>
   </form>
   <div class="table-wrap">
@@ -301,7 +305,7 @@
         <td class="mono">{{ mail.mail_id }}</td>
         <td>{% if mail.state %}<span class="status s2">已领取</span>{% else %}<span class="status s3">未领取</span>{% endif %}</td>
         <td>{{ mail.subject }}<div class="muted mono">{{ mail.sender }}</div></td>
-        <td class="mono small-text">{% for item in mail['items'] %}{{ item.id }}×{{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
+        <td class="small-text">{% for item in mail.item_rows %}{{ item.name }}×{{ item.count }}<div class="muted mono">{{ item.id }}</div>{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
         <td class="mono">{{ mail.create_at }}</td>
         <td><form method="post" action="/admin/accounts/{{ account.uid }}/mail/{{ mail.mail_id }}/delete"><button class="danger" type="submit">删除</button></form></td>
       </tr>
@@ -314,7 +318,7 @@
 </section>
 
 <section class="panel" id="orders">
-  <div class="panel-head"><h2>订单与补发</h2><span class="muted">最近 {{ orders|length }} 笔 · 已发放 {{ summary.granted_orders }}</span></div>
+  <div class="panel-head"><h2>订单与补发</h2><a href="/admin/orders?q={{ account.uid }}">全局订单管理</a></div>
   <div class="table-wrap">
   <table class="table compact-table">
     <thead><tr><th>订单号</th><th>商品</th><th>金额</th><th>平台</th><th>状态</th><th>已发放</th><th>礼包内容</th><th>创建时间</th></tr></thead>
@@ -325,10 +329,10 @@
         <td>{{ order.product_name or order.gift_name or order.good_id }}</td>
         <td>{{ order.amount }}</td>
         <td>{% if order.platform == 'ios' %}iOS{% else %}Android{% endif %}</td>
-        <td>{% if order.status == 2 %}<span class="status s2">已支付</span>{% else %}<span class="status s3">{{ order.status }}</span>{% endif %}</td>
+        <td>{% if order.revoked %}<span class="status s4">已撤回</span>{% elif order.status == 2 %}<span class="status s4">已驳回</span>{% elif order.status == 1 %}<span class="status s2">已通过</span>{% else %}<span class="status s3">待处理</span>{% endif %}</td>
         <td>{% if order.granted %}<span class="status s2">是</span>{% else %}<span class="status s4">否</span>{% endif %}</td>
         <td class="small-note">
-          {% for item in order.gift_items %}{{ item.name }} × {{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">待发放 / 无明细</span>{% endfor %}
+          {% for item in order.gift_items %}{{ item.name }} × {{ item.count }}<div class="muted mono">{{ item.id }}</div>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">待发放 / 无明细</span>{% endfor %}
         </td>
         <td class="mono">{{ order.created_at }}</td>
       </tr>
@@ -339,6 +343,22 @@
   </table>
   </div>
 </section>
+
+{% if debt_rows %}
+<section class="panel">
+  <div class="panel-head"><h2>撤回欠账</h2><span class="muted">被驳回订单已扣除现有资源，不足部分会在后续发放时优先抵扣</span></div>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th>资源</th><th>类型</th><th>欠账数量</th></tr></thead>
+      <tbody>
+      {% for row in debt_rows %}
+        <tr><td>{{ row.name }}<div class="muted mono">{{ row.id }}</div></td><td class="mono">{{ row.type }}</td><td>{{ row.count }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
 
 <section class="panel danger-zone" id="advanced">
   <div class="panel-head"><h2>高级操作</h2><span class="muted">Token、订阅时间、JSON 导出与账号删除</span></div>

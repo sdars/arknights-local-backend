@@ -160,6 +160,21 @@ def set_purchase_count(user, good_id, count):
     return row
 
 
+def adjust_purchase(user, good_id, delta):
+    good_id = str(good_id or "")
+    target = section(good_id)
+    info = _info_list(user, target)
+    for index, row in enumerate(info):
+        if isinstance(row, dict) and str(row.get("id") or "") == good_id:
+            count = max(0, int(row.get("count") or 0) + int(delta))
+            if count:
+                row["count"] = count
+            else:
+                info.pop(index)
+            return count
+    return 0
+
+
 def catalog_rows(limit=None):
     rows = []
     for good_id, item in catalog().items():

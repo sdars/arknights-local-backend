@@ -213,8 +213,10 @@ async def confirm_order_state(request: Request):
         account = account_by_token(str(body.get("token", "")))
         if account:
             order = payments.latest_order(account)
-    if order and order["status"]:
+    if order and int(order["status"] or 0) == 1:
         return {"status": 4, "message": "SUCCEED", "payState": 3, "result": 0}
+    if order and int(order["status"] or 0) == 2:
+        return {"status": 2, "message": "REJECTED", "payState": 2, "result": 1}
     return {"status": 1, "message": "PENDING", "payState": 1, "result": 0}
 
 

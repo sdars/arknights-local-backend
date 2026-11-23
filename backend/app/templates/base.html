@@ -20,6 +20,8 @@
       <nav>
         <a href="/admin" class="{% if active == 'dashboard' %}active{% endif %}">仪表盘</a>
         <a href="/admin/accounts" class="{% if active == 'accounts' %}active{% endif %}">账号管理</a>
+        <a href="/admin/orders" class="{% if active == 'orders' %}active{% endif %}">订单管理</a>
+        <a href="/admin/vouchers" class="{% if active == 'vouchers' %}active{% endif %}">代金券</a>
         <a href="/admin/mail" class="{% if active == 'mail' %}active{% endif %}">邮件中心</a>
         <a href="/admin/gifts" class="{% if active == 'gifts' %}active{% endif %}">礼包目录</a>
         <a href="/admin/development" class="{% if active == 'development' %}active{% endif %}">研发状态</a>
@@ -37,6 +39,7 @@
       {% block content %}{% endblock %}
     </main>
   </div>
+  <script src="/static/resource_picker.js"></script>
 </body>
 </html>
 

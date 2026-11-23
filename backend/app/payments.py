@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from .config import APP_CODE, BASE_DIR
 from .db import connect, now_ts
 from .grants import apply_items, empty_delta, merge_delta, normalize_platform
-from . import gift_catalog, monthly_card
+from . import gift_catalog, grants, monthly_card, vouchers
 
 
 PRODUCT_PATH = BASE_DIR / "fixtures" / "product_list.json"
@@ -195,7 +195,16 @@ def _extension(order):
     }
 
 
-def create_order(account, store_id=None, good_id=None, platform=None):
+def create_order(
+    account,
+    store_id=None,
+    good_id=None,
+    platform=None,
+    origin="client",
+    created_by=None,
+    evaluate_voucher=True,
+    replace_pending=True,
+):
     product = find_product(store_id, good_id)
     if not product:
         return None
@@ -228,25 +237,62 @@ def create_order(account, store_id=None, good_id=None, platform=None):
             ensure_ascii=False,
             separators=(",", ":"),
         ),
+        "origin": str(origin or "client"),
+        "created_by": created_by,
     }
     with connect() as conn:
-        conn.execute("DELETE FROM orders WHERE account_id=? AND status=0", (account["id"],))
+        if replace_pending:
+            conn.execute(
+                "DELETE FROM orders WHERE account_id=? AND status=0 AND origin='client'",
+                (account["id"],),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM orders WHERE account_id=? AND status=0 AND good_id=?",
+                (account["id"], order["good_id"]),
+            )
         conn.execute(
-            """INSERT INTO orders(order_id,account_id,uid,token,store_id,good_id,product_name,amount,status,created_at,paid_at,raw_json,platform)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO orders(order_id,account_id,uid,token,store_id,good_id,product_name,amount,status,created_at,paid_at,raw_json,platform,origin,created_by)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 order["order_id"], order["account_id"], order["uid"], order["token"],
                 order["store_id"], order["good_id"], order["product_name"], order["amount"],
                 0, order["created_at"], None, order["raw_json"], order["platform"],
+                order["origin"], order["created_by"],
             ),
         )
+    if evaluate_voucher:
+        decision = vouchers.evaluate(account, order)
+        if decision["action"] == "approve":
+            voucher = decision["voucher"]
+            if vouchers.consume(voucher["id"]):
+                with connect() as conn:
+                    conn.execute(
+                        "UPDATE orders SET voucher_id=? WHERE order_id=?",
+                        (int(voucher["id"]), order["order_id"]),
+                    )
+                result = confirm_order(account, order["order_id"], source="voucher")
+                if result.get("result") == 0:
+                    order["status"] = 1
+                    order["voucher_id"] = voucher["id"]
+                else:
+                    vouchers.release(voucher["id"])
+        elif decision["action"] == "reject":
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE orders SET status=2,admin_note=? WHERE order_id=?",
+                    (decision.get("reason") or "代金券范围外", order["order_id"]),
+                )
+            order["status"] = 2
+            order["reject_reason"] = decision.get("reason") or "代金券范围外"
     return order
 
 
 def latest_order(account):
     with connect() as conn:
         row = conn.execute(
-            "SELECT * FROM orders WHERE account_id=? ORDER BY created_at DESC LIMIT 1", (account["id"],)
+            "SELECT * FROM orders WHERE account_id=? ORDER BY created_at DESC, order_id DESC LIMIT 1",
+            (account["id"],),
         ).fetchone()
     return dict(row) if row else None
 
@@ -347,7 +393,7 @@ def sdk_bill(account, channel):
 def mark_paid(order_id):
     with connect() as conn:
         conn.execute(
-            "UPDATE orders SET status=1,paid_at=COALESCE(paid_at,?) WHERE order_id=?",
+            "UPDATE orders SET status=1,paid_at=COALESCE(paid_at,?) WHERE order_id=? AND status=0",
             (now_ts(), order_id),
         )
     return order_by_id(order_id)
@@ -420,12 +466,12 @@ def order_state(order_id):
             "pc": 1,
         },
         "type": "A",
-        "status": 0 if order["status"] else 101,
-        "msg": "已支付已回调" if order["status"] else "未支付",
+        "status": 0 if int(order["status"] or 0) == 1 else (102 if int(order["status"] or 0) == 2 else 101),
+        "msg": "已支付已回调" if int(order["status"] or 0) == 1 else ("订单已驳回" if int(order["status"] or 0) == 2 else "未支付"),
     }
 
 
-def confirm_order(account, order_id):
+def confirm_order(account, order_id, source="client"):
     with _confirm_lock:
         with connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -433,6 +479,12 @@ def confirm_order(account, order_id):
             if not row or row["account_id"] != account["id"]:
                 return {"result": 2, "error": "order not found"}
             order = dict(row)
+            if int(order.get("status") or 0) == 2 or int(order.get("revoked") or 0):
+                return {
+                    "result": 1,
+                    "error": "order rejected",
+                    "goodId": order.get("good_id"),
+                }
             account_row = conn.execute(
                 "SELECT * FROM accounts WHERE id=?", (order["account_id"],)
             ).fetchone()
@@ -501,6 +553,130 @@ def confirm_order(account, order_id):
                 "orderIdList": [order_id],
                 "playerDataDelta": delta,
             }
+
+
+def _ledger_items(order):
+    try:
+        ledger = json.loads(order.get("granted_items_json") or "[]")
+    except Exception:
+        ledger = []
+    if isinstance(ledger, list) and ledger:
+        return ledger
+    return order_items(order)
+
+
+def _order_platform(order, account_row=None, user=None):
+    return (
+        order_platform(order.get("platform"))
+        or order_platform(account_row["platform"] if account_row is not None and "platform" in account_row.keys() else None)
+        or order_platform((user or {}).get("localPlatform"))
+        or "android"
+    )
+
+
+def admin_approve_order(order_id, actor=None):
+    with _confirm_lock:
+        with connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+            if not row:
+                return {"result": 2, "error": "order not found"}
+            order = dict(row)
+            account_row = conn.execute("SELECT * FROM accounts WHERE id=?", (order["account_id"],)).fetchone()
+            if not account_row:
+                return {"result": 2, "error": "account not found"}
+            user = json.loads(account_row["user_json"])
+            platform = _order_platform(order, account_row, user)
+            items = _ledger_items(order)
+            card_id = card_id_for_good(order["good_id"])
+            granted = int(order.get("granted", 0) or 0)
+            revoked = int(order.get("revoked", 0) or 0)
+            if revoked:
+                try:
+                    revoked_debt = json.loads(order.get("revoke_debt_json") or "{}")
+                except Exception:
+                    revoked_debt = {}
+                grants.clear_debt_map(user, revoked_debt)
+            if not granted or revoked:
+                if revoked and order.get("voucher_id"):
+                    vouchers.consume(order["voucher_id"])
+                apply_items(user, items, source="admin-order", platform=platform)
+                if card_id:
+                    monthly_card.adjust(user, 30)
+                if str(order["good_id"]).startswith("GP_"):
+                    gift_catalog.record_purchase(user, order["good_id"], 1)
+            conn.execute(
+                """UPDATE orders SET status=1,paid_at=COALESCE(paid_at,?),granted=1,granted_at=COALESCE(granted_at,?),
+                   granted_items_json=?,revoked=0,revoked_at=NULL,revoked_items_json=NULL,
+                   revoke_debt_json=NULL,admin_note=COALESCE(admin_note,'') WHERE order_id=?""",
+                (
+                    now_ts(),
+                    now_ts(),
+                    json.dumps(items, ensure_ascii=False, separators=(",", ":")),
+                    order_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE accounts SET user_json=? WHERE id=?",
+                (json.dumps(user, ensure_ascii=False, separators=(",", ":")), account_row["id"]),
+            )
+    return {"result": 0, "orderId": order_id, "items": items}
+
+
+def admin_reject_order(order_id, actor=None, reason=""):
+    with _confirm_lock:
+        with connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+            if not row:
+                return {"result": 2, "error": "order not found"}
+            order = dict(row)
+            account_row = conn.execute("SELECT * FROM accounts WHERE id=?", (order["account_id"],)).fetchone()
+            if not account_row:
+                return {"result": 2, "error": "account not found"}
+            user = json.loads(account_row["user_json"])
+            platform = _order_platform(order, account_row, user)
+            items = _ledger_items(order)
+            card_id = card_id_for_good(order["good_id"])
+            granted = int(order.get("granted", 0) or 0)
+            revoked_items = []
+            debt = {}
+            if granted and int(order.get("revoked", 0) or 0) == 0:
+                revoked_items, debt, _ = grants.revoke_items(
+                    user, items, source="admin-reject", platform=platform
+                )
+                if card_id:
+                    monthly_card.adjust(user, -30)
+                if str(order["good_id"]).startswith("GP_"):
+                    gift_catalog.adjust_purchase(user, order["good_id"], -1)
+                if order.get("voucher_id"):
+                    vouchers.release(order["voucher_id"])
+            conn.execute(
+                """UPDATE orders SET status=2,revoked=?,revoked_at=?,revoked_items_json=?,
+                   revoke_debt_json=?,admin_note=? WHERE order_id=?""",
+                (
+                    1 if granted else 0,
+                    now_ts() if granted else None,
+                    json.dumps(revoked_items, ensure_ascii=False, separators=(",", ":")) if granted else None,
+                    json.dumps(debt, ensure_ascii=False, separators=(",", ":")) if debt else None,
+                    str(reason or "管理员驳回"),
+                    order_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE accounts SET user_json=? WHERE id=?",
+                (json.dumps(user, ensure_ascii=False, separators=(",", ":")), account_row["id"]),
+            )
+    return {"result": 0, "orderId": order_id, "revokedItems": revoked_items, "debt": debt}
+
+
+def admin_set_pending(order_id, note=""):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE orders SET status=0,admin_note=? WHERE order_id=?",
+            (str(note or "管理员重置为待处理"), order_id),
+        )
+    return {"result": 0, "orderId": order_id}
 
 
 def backfill_paid_order_grants(limit=1000):

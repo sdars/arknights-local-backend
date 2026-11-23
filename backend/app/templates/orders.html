@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% set active = 'orders' %}
+{% block title %}订单管理{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">ORDER CONTROL</p>
+    <h1>订单管理</h1>
+    <p class="muted">创建、通过、驳回、撤回订单；驳回会同步撤销已到账资源，缺失部分转为账号欠账，下次发放优先抵扣。</p>
+  </div>
+  <a class="btn" href="/admin/vouchers">代金券</a>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>批量开单</h2><span class="muted">指定账号、条件账号或全服；一次可选多个商品</span></div>
+  <form class="form-grid" method="post" action="/admin/orders/create">
+    <label>账号范围
+      <select name="scope">
+        <option value="uids">指定 UID 列表</option>
+        <option value="filter">按条件筛选</option>
+        <option value="all">全部账号</option>
+      </select>
+    </label>
+    <label>UID 列表<input name="uids" placeholder="10000000,10000001"></label>
+    <label>UID 下限<input type="number" name="uid_min" placeholder="10000000"></label>
+    <label>UID 上限<input type="number" name="uid_max" placeholder="19999999"></label>
+    <label>手机号 / 昵称关键词<input name="keyword" placeholder="博士 / 138"></label>
+    <label>平台
+      <select name="platform">
+        <option value="">跟随账号</option>
+        <option value="android">Android</option>
+        <option value="ios">iOS</option>
+      </select>
+    </label>
+    <label class="span-all">商品（可多选）
+      <select name="good_ids" multiple size="12" required>
+        {% for product in products %}
+        <option value="{{ product.product_id }}">{{ product.name }} · {{ product.product_id }} · ￥{{ '%.2f'|format((product.price or 0) / 100) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>创建后处理
+      <select name="mode">
+        <option value="pending">仅创建待处理订单</option>
+        <option value="approve">创建并立即通过 / 发放</option>
+        <option value="reject">创建并立即驳回</option>
+      </select>
+    </label>
+    <label>备注 / 驳回原因<input name="note" placeholder="可选"></label>
+    <div class="actions span-all"><button class="primary" type="submit">批量创建订单</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>筛选</h2><span class="muted">{{ orders|length }} 条</span></div>
+  <form class="filter-form" method="get" action="/admin/orders">
+    <input name="q" value="{{ q }}" placeholder="订单号 / UID / 商品 ID / 名称 / 手机号">
+    <select name="status">
+      <option value="" {% if not status_filter %}selected{% endif %}>全部状态</option>
+      <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>待处理</option>
+      <option value="approved" {% if status_filter == 'approved' %}selected{% endif %}>已通过</option>
+      <option value="rejected" {% if status_filter == 'rejected' %}selected{% endif %}>已驳回</option>
+      <option value="revoked" {% if status_filter == 'revoked' %}selected{% endif %}>已撤回</option>
+    </select>
+    <select name="platform">
+      <option value="" {% if not platform_filter %}selected{% endif %}>全部平台</option>
+      <option value="android" {% if platform_filter == 'android' %}selected{% endif %}>Android</option>
+      <option value="ios" {% if platform_filter == 'ios' %}selected{% endif %}>iOS</option>
+    </select>
+    <button type="submit">查询</button>
+    <a class="btn" href="/admin/orders">重置</a>
+  </form>
+</section>
+
+<form id="bulk-form" method="post" action="/admin/orders/bulk"></form>
+<section class="panel">
+  <div class="panel-head"><h2>订单列表</h2>
+    <div class="actions">
+      <select name="action" form="bulk-form">
+        <option value="approve">批量通过</option>
+        <option value="reject">批量驳回 / 撤回</option>
+        <option value="pending">批量重置待处理</option>
+      </select>
+      <input name="reason" placeholder="驳回原因（可选）" form="bulk-form">
+      <button class="primary" type="submit" form="bulk-form">执行</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th></th><th>订单 / 账号</th><th>商品</th><th>金额 / 平台</th><th>状态</th><th>礼包内容 / 撤回</th><th>代金券 / 备注</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for order in orders %}
+        <tr>
+          <td><input type="checkbox" name="order_ids" value="{{ order.order_id }}" form="bulk-form"></td>
+          <td class="mono small-text">{{ order.order_id }}<div class="muted">UID {{ order.uid }} · {{ order.nickname or order.phone or '-' }}</div></td>
+          <td>{{ order.gift_name or order.product_name }}<div class="muted mono">{{ order.good_id }}</div></td>
+          <td>￥{{ '%.2f'|format((order.amount or 0) / 100) }}<div class="muted">{{ 'iOS' if order.platform == 'ios' else 'Android' }}</div></td>
+          <td>
+            {% if order.revoked %}<span class="status s4">已撤回</span>
+            {% elif order.status == 2 %}<span class="status s4">已驳回</span>
+            {% elif order.status == 1 %}<span class="status s2">已通过</span>
+            {% else %}<span class="status s3">待处理</span>{% endif %}
+            <div class="muted">{{ '已发放' if order.granted else '未发放' }}</div>
+          </td>
+          <td class="small-note">
+            {% for item in order.gift_items %}{{ item.name }} × {{ item.count }}<div class="muted mono">{{ item.id }}</div>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">无明细</span>{% endfor %}
+            {% if order.revoked_items %}<div class="alert-inline">已撤回：{% for item in order.revoked_items %}{{ item.name }}×{{ item.count }}{% if not loop.last %}、{% endif %}{% endfor %}</div>{% endif %}
+            {% if order.revoke_debt %}<div class="alert-inline">欠账：{% for key, count in order.revoke_debt.items() %}{{ key }}×{{ count }}{% if not loop.last %}、{% endif %}{% endfor %}</div>{% endif %}
+          </td>
+          <td class="small-note">{% if order.voucher_code %}<span class="pill">{{ order.voucher_code }}</span><br>{% endif %}{{ order.admin_note or '' }}</td>
+          <td>
+            <form method="post" action="/admin/orders/{{ order.order_id }}/action" class="row-form">
+              <select name="action">
+                <option value="approve">通过 / 补发</option>
+                <option value="reject">驳回 / 撤回</option>
+                <option value="pending">设为待处理</option>
+              </select>
+              <input name="reason" placeholder="原因">
+              <button type="submit">执行</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">没有匹配的订单。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

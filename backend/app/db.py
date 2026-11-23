@@ -82,6 +82,22 @@ def init_db():
                 granted_items_json TEXT,
                 raw_json TEXT
             );
+            CREATE TABLE IF NOT EXISTS vouchers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                account_id INTEGER,
+                account_uid INTEGER,
+                scope_json TEXT NOT NULL DEFAULT '{}',
+                max_amount INTEGER NOT NULL DEFAULT 0,
+                uses_total INTEGER NOT NULL DEFAULT 1,
+                uses_remaining INTEGER NOT NULL DEFAULT 1,
+                start_at INTEGER NOT NULL DEFAULT 0,
+                end_at INTEGER NOT NULL DEFAULT 0,
+                status INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS battle_sessions (
                 battle_id TEXT PRIMARY KEY,
                 account_id INTEGER NOT NULL,
@@ -135,6 +151,18 @@ def init_db():
             conn.execute("ALTER TABLE orders ADD COLUMN granted_items_json TEXT")
         if "platform" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN platform TEXT")
+        for column, ddl in (
+            ("revoked", "ALTER TABLE orders ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0"),
+            ("revoked_at", "ALTER TABLE orders ADD COLUMN revoked_at INTEGER"),
+            ("revoked_items_json", "ALTER TABLE orders ADD COLUMN revoked_items_json TEXT"),
+            ("revoke_debt_json", "ALTER TABLE orders ADD COLUMN revoke_debt_json TEXT"),
+            ("voucher_id", "ALTER TABLE orders ADD COLUMN voucher_id INTEGER"),
+            ("admin_note", "ALTER TABLE orders ADD COLUMN admin_note TEXT"),
+            ("origin", "ALTER TABLE orders ADD COLUMN origin TEXT NOT NULL DEFAULT 'client'"),
+            ("created_by", "ALTER TABLE orders ADD COLUMN created_by TEXT"),
+        ):
+            if column not in order_columns:
+                conn.execute(ddl)
         account_columns = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)")}
         if "platform" not in account_columns:
             conn.execute("ALTER TABLE accounts ADD COLUMN platform TEXT NOT NULL DEFAULT 'android'")

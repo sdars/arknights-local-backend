@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% set active = 'vouchers' %}
+{% block title %}代金券{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">PURCHASE VOUCHERS</p>
+    <h1>代金券</h1>
+    <p class="muted">账号有生效代金券时：范围内订单自动通过并发放，范围外订单自动驳回；没有代金券时保持普通待处理订单。</p>
+  </div>
+  <a class="btn" href="/admin/orders">订单管理</a>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>创建代金券</h2><span class="muted">可按商品、商品类别、平台和单笔上限限制</span></div>
+  <form class="form-grid" method="post" action="/admin/vouchers">
+    <label>名称<input name="name" placeholder="周年庆代金券" required></label>
+    <label>券码<input name="code" placeholder="留空自动生成"></label>
+    <label>适用账号
+      <select name="account_scope">
+        <option value="one">指定账号</option>
+        <option value="all">全部账号（每个账号一张）</option>
+      </select>
+    </label>
+    <label>UID<input type="number" name="uid" placeholder="10000000"></label>
+    <label>范围类型
+      <select name="scope_type">
+        <option value="all">全部商品</option>
+        <option value="goods">指定商品 ID</option>
+        <option value="categories">商品类别</option>
+        <option value="mixed">商品 ID + 类别</option>
+      </select>
+    </label>
+    <label>平台
+      <select name="platform">
+        <option value="any">不限平台</option>
+        <option value="android">Android</option>
+        <option value="ios">iOS</option>
+      </select>
+    </label>
+    <label>单笔金额上限（元，0=不限）<input type="number" name="max_amount_yuan" value="0" min="0"></label>
+    <label>可用次数<input type="number" name="uses" value="1" min="-1" placeholder="-1=不限"></label>
+    <label>生效时间<input type="datetime-local" name="start_at"></label>
+    <label>失效时间<input type="datetime-local" name="end_at"></label>
+    <label class="span-all">指定商品（范围类型包含“指定商品”时生效）
+      <select name="goods" multiple size="8">
+        {% for product in products %}
+        <option value="{{ product.product_id }}">{{ product.name }} · {{ product.product_id }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="span-all">商品类别
+      <span class="checkbox-row">
+        <label><input type="checkbox" name="categories" value="cash"> 源石直充</label>
+        <label><input type="checkbox" name="categories" value="gift"> 组合包</label>
+        <label><input type="checkbox" name="categories" value="monthly"> 月卡</label>
+        <label><input type="checkbox" name="categories" value="other"> 其他</label>
+        <label><input type="checkbox" name="categories" value="all"> 全部</label>
+      </span>
+    </label>
+    <div class="actions span-all"><button class="primary" type="submit">创建代金券</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>代金券列表</h2><span class="muted">{{ vouchers|length }} 张</span></div>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th>ID / 券码</th><th>名称 / 账号</th><th>范围</th><th>上限</th><th>次数</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for voucher in vouchers %}
+        <tr>
+          <td class="mono small-text">{{ voucher.id }}<div>{{ voucher.code }}</div></td>
+          <td>{{ voucher.name }}<div class="muted">{% if voucher.account_uid %}UID {{ voucher.account_uid }} · {{ voucher.owner_nickname or voucher.owner_phone or '-' }}{% else %}全服{% endif %}</div></td>
+          <td class="small-note">{{ voucher.scope_text }}<div class="muted mono">{{ voucher.scope|tojson }}</div></td>
+          <td>{% if voucher.max_amount %}￥{{ '%.2f'|format(voucher.max_amount / 100) }}{% else %}不限{% endif %}</td>
+          <td>{{ '不限' if voucher.uses_remaining < 0 else voucher.uses_remaining }} / {{ '不限' if voucher.uses_total < 0 else voucher.uses_total }}</td>
+          <td class="small-text">{{ voucher.start_at or '立即' }}<div class="muted">{{ voucher.end_at or '永久' }}</div></td>
+          <td>{% if voucher.status %}<span class="status s2">生效</span>{% else %}<span class="status s4">停用</span>{% endif %}</td>
+          <td>
+            <div class="actions">
+              <form method="post" action="/admin/vouchers/{{ voucher.id }}/status">
+                <input type="hidden" name="status" value="{{ 0 if voucher.status else 1 }}">
+                <button type="submit">{{ '停用' if voucher.status else '启用' }}</button>
+              </form>
+              <form method="post" action="/admin/vouchers/{{ voucher.id }}/delete" onsubmit="return confirm('删除这张代金券？') ">
+                <button class="danger" type="submit">删除</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">暂无代金券。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

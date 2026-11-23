@@ -130,6 +130,88 @@ def avatar_catalog():
     return result
 
 
+def furniture_catalog():
+    building = excel("building_data.json") or {}
+    custom = building.get("customData") or {}
+    result = {}
+    for furn_id, furn in (custom.get("furnitures") or {}).items():
+        if not isinstance(furn, dict):
+            continue
+        result[str(furn_id)] = {
+            "id": str(furn_id),
+            "name": str(furn.get("name") or furn_id),
+            "type": "FURN",
+            "subType": str(furn.get("subType") or ""),
+            "rarity": furn.get("rarity") or "",
+        }
+    return result
+
+
+def resource_catalog():
+    result = {}
+    result.update(item_catalog())
+    for char_id, char in character_catalog().items():
+        result[char_id] = {
+            "id": char_id,
+            "name": char["name"],
+            "type": "CHAR",
+            "rarity": char.get("rarity") or "",
+        }
+    for skin_id, skin in skin_catalog().items():
+        result[skin_id] = {
+            "id": skin_id,
+            "name": skin["name"],
+            "type": "CHAR_SKIN",
+            "rarity": "",
+        }
+    for avatar_id, avatar in avatar_catalog().items():
+        result[avatar_id] = {
+            "id": avatar_id,
+            "name": avatar["name"],
+            "type": "PLAYER_AVATAR",
+            "rarity": "",
+        }
+    for furn_id, furn in furniture_catalog().items():
+        result[furn_id] = {
+            "id": furn_id,
+            "name": furn["name"],
+            "type": "FURN",
+            "rarity": furn.get("rarity") or "",
+        }
+    return result
+
+
+def resource_search(query="", limit=80):
+    needle = str(query or "").strip().lower()
+    catalog = resource_catalog()
+    if not needle:
+        priority = {
+            "DIAMOND": 0,
+            "GOLD": 1,
+            "DIAMOND_SHD": 2,
+            "MATERIAL": 3,
+            "CARD_EXP": 4,
+            "TKT_GACHA": 5,
+            "TKT_GACHA_10": 6,
+            "TKT_RECRUIT": 7,
+            "TKT_INST_FIN": 8,
+            "CHAR": 9,
+            "CHAR_SKIN": 10,
+            "PLAYER_AVATAR": 11,
+            "FURN": 12,
+        }
+        rows = list(catalog.values())
+        rows.sort(key=lambda item: (priority.get(item.get("type"), 99), item.get("name") or item["id"], item["id"]))
+    else:
+        rows = []
+        for item_id, item in catalog.items():
+            haystack = f"{item_id} {item.get('name') or ''}".lower()
+            if needle in haystack:
+                rows.append(item)
+    rows.sort(key=lambda item: (0 if needle and str(item["id"]).lower().startswith(needle) else 1, item.get("name") or item["id"], item["id"]))
+    return rows[: int(limit)]
+
+
 def item_type(item_id):
     item = item_catalog().get(str(item_id or ""))
     return item["type"] if item else "MATERIAL"

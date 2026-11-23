@@ -556,6 +556,12 @@ async def create_order(request: Request):
         body.get("goodId"),
         body.get("platform"),
     )
+    if order and int(order.get("status") or 0) == 2:
+        return {
+            "result": 1,
+            "error": order.get("reject_reason") or "order rejected",
+            "orderId": order["order_id"],
+        }
     return payments.create_order_response(order)
 
 
@@ -646,7 +652,7 @@ async def check_order_v2(payment: str, request: Request):
         "status": 0,
         "msg": "OK",
         "type": "A",
-        "data": {"orderId": order_id, "payment": payment, "paid": bool(order["status"])},
+        "data": {"orderId": order_id, "payment": payment, "paid": int(order["status"] or 0) == 1},
     }
 
 

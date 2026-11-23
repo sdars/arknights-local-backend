@@ -1,0 +1,19 @@
+{% macro picker(initial=[]) -%}
+<div class="resource-picker">
+  <div class="resource-search-wrap">
+    <input class="resource-search" type="search" autocomplete="off" placeholder="搜索资源名称或 ID，例如 源石 / 4002 / char_1035_wisdel">
+    <div class="resource-results"></div>
+  </div>
+  <div class="resource-selected">
+    {% for item in initial %}
+    <div class="resource-row">
+      <input type="hidden" name="item_id" value="{{ item.id }}">
+      <input type="hidden" name="item_type" value="{{ item.type }}">
+      <div class="resource-name">{{ item.name }}<span class="resource-id">{{ item.id }}</span></div>
+      <input type="number" name="item_count" value="{{ item.count }}" min="1" max="999999" required>
+      <button type="button" class="remove-resource">移除</button>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{%- endmacro %}

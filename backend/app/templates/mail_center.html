@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "resource_picker.html" import picker %}
 {% set active = 'mail' %}
 {% block title %}邮件中心 · Arknights 本机后端{% endblock %}
 {% block content %}
@@ -20,7 +21,11 @@
       <label>发件人<input name="sender" value="{{ edit_template.sender if edit_template else 'penguin_logistics' }}"></label>
       <label>标题<input name="subject" value="{{ edit_template.subject if edit_template else '' }}" required></label>
       <label>正文<textarea name="content" rows="5">{{ edit_template.content if edit_template else '' }}</textarea></label>
-      <label>附件 JSON<textarea class="mono" name="items" rows="6" placeholder='[{"id":"4001","type":"GOLD","count":20000}]'>{% if edit_template %}{{ edit_template['items']|tojson }}{% endif %}</textarea></label>
+      <div class="span-all">
+        <div class="field-label">附件资源</div>
+        {{ picker(edit_template.resource_items if edit_template else []) }}
+        <p class="muted small-note">按名称或 ID 搜索，点击结果添加；数量可自由填写。留空表示无附件。</p>
+      </div>
       <label>有效天数<input type="number" name="expire_days" value="{{ edit_template.expire_days if edit_template else 365 }}" min="0"></label>
       <div class="actions"><button class="primary" type="submit">保存模板</button></div>
     </form>
@@ -36,7 +41,7 @@
         <tr>
           <td class="mono">{{ template.id }}</td>
           <td>{{ template.name }}<div class="muted">{{ template.subject }}</div></td>
-          <td class="mono small-text">{% for item in template['items'] %}{{ item.id }}×{{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
+          <td class="small-text">{% for item in template.resource_items %}{{ item.name }}×{{ item.count }}<div class="muted mono">{{ item.id }}</div>{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
           <td>
             <div class="actions">
               <a class="btn" href="/admin/mail?edit={{ template.id }}">编辑</a>
@@ -83,8 +88,11 @@
     <label>标题<input name="subject" placeholder="保留模板值"></label>
     <label>有效天数<input type="number" name="expire_days" placeholder="模板值"></label>
     <label class="span-all">正文<textarea name="content" rows="4" placeholder="留空保留模板正文"></textarea></label>
-    <label class="span-all">附件 JSON<textarea class="mono" name="items" rows="4" placeholder='[{"id":"4002","type":"DIAMOND","count":5}]'> </textarea></label>
-    <p class="muted span-all small-note">附件留空时使用模板附件；填写后会完全替换模板附件。type 必须与 item_table 的 itemType 一致。</p>
+    <div class="span-all">
+      <div class="field-label">附件资源</div>
+      {{ picker([]) }}
+      <p class="muted small-note">留空使用模板附件；添加后完全替换模板附件。只接受资源目录中存在的名称或 ID。</p>
+    </div>
     <div class="actions span-all"><button class="primary" type="submit">发送</button></div>
   </form>
 </section>
@@ -105,7 +113,7 @@
         <td class="mono">{{ mail.mail_id }}</td>
         <td><a class="mono" href="/admin/accounts/{{ mail.uid }}#mail">{{ mail.uid }}</a><div class="muted">{{ mail.nickname or mail.phone or '-' }}</div></td>
         <td>{{ mail.subject }}<div class="muted mono">{{ mail.sender }}</div></td>
-        <td class="mono small-text">{% for item in mail['items'] %}{{ item.id }}×{{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
+        <td class="small-text">{% for item in mail.item_rows %}{{ item.name }}×{{ item.count }}<div class="muted mono">{{ item.id }}</div>{% if not loop.last %}<br>{% endif %}{% else %}无{% endfor %}</td>
         <td>{% if mail.removed %}<span class="status s4">已删除</span>{% elif mail.state %}<span class="status s2">已领取</span>{% else %}<span class="status s3">未领取</span>{% endif %}</td>
         <td class="mono">{{ mail.create_at }}<div class="muted">{{ mail.expire_at }}</div></td>
         <td>

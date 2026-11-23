@@ -122,6 +122,24 @@ button.link { border: 0; background: none; padding: 0; color: var(--muted); }
 .section-label { display: flex; align-items: center; gap: 12px; margin: 8px 0 0; color: var(--gold-2); font-size: 12px; letter-spacing: 1px; }
 .section-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 .small-note { margin: 0; font-size: 12px; line-height: 1.7; }
+.field-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.resource-id { display: block; color: var(--muted); font: 11px/1.5 "JetBrains Mono", Consolas, monospace; }
+.resource-picker { position: relative; }
+.resource-search-wrap { position: relative; }
+.resource-results { display: none; position: absolute; z-index: 20; left: 0; right: 0; max-height: 280px; overflow: auto; background: #0e1115; border: 1px solid #3a3020; box-shadow: 0 12px 30px rgba(0,0,0,.45); }
+.resource-results.open { display: block; }
+.resource-result { display: flex; width: 100%; justify-content: space-between; align-items: center; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; padding: 9px 12px; cursor: pointer; }
+.resource-result:hover { background: #1c1810; }
+.resource-type { color: var(--muted); font: 11px "JetBrains Mono", Consolas, monospace; }
+.resource-empty { color: var(--muted); padding: 10px 12px; font-size: 12px; }
+.resource-selected { display: grid; gap: 8px; margin-top: 8px; }
+.resource-row { display: grid; grid-template-columns: minmax(180px, 1fr) 120px auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); background: #101419; }
+.resource-row input[type="number"] { width: 100%; }
+.remove-resource { padding: 7px 10px; color: var(--red); border-color: #4a2a2e; background: #1d1113; }
+.checkbox-row { display: flex; flex-wrap: wrap; gap: 14px; padding: 6px 0; }
+.checkbox-row label { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.checkbox-row input { width: auto; }
+.alert-inline { margin-top: 6px; padding: 5px 7px; border-left: 2px solid #7b3b3f; background: #1c1214; color: #e3a5a8; font-size: 11px; }
 .small-text { font-size: 11px !important; }
 .table-wrap { width: 100%; overflow-x: auto; }
 .table-wrap.short { max-height: 420px; overflow-y: auto; }

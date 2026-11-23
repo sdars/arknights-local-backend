@@ -59,6 +59,27 @@ def is_active(user, now=None):
     )
 
 
+def adjust(user, days, now=None):
+    now = int(now or time.time())
+    status = user.setdefault("status", {})
+    start = _int(status.get("monthlySubscriptionStartTime"), 0)
+    end = _int(status.get("monthlySubscriptionEndTime"), 0)
+    delta = int(days) * 86400
+    if days > 0:
+        if start <= 0:
+            start = now
+        end = max(now, end) + delta
+    else:
+        end = max(0, end + delta)
+        if end <= now:
+            start = 0
+            end = 0
+    status["monthlySubscriptionStartTime"] = start
+    status["monthlySubscriptionEndTime"] = end
+    status["tipMonthlyCardExpireTs"] = end
+    return status
+
+
 def activate(user, card_id=None, now=None, platform=None):
     now = int(now or time.time())
     card_id = str(card_id or current_card_id())

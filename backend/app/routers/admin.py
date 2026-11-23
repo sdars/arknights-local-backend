@@ -14,7 +14,16 @@ from ..config import APP_DIR, ASSET_CDN, SERVER_NAME, CLIENT_VERSION, RES_VERSIO
 from ..db import connect, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
-from .. import game_data, gift_catalog, grants, mail_service, payments, runtime_settings, selfcheck
+from .. import (
+    game_data,
+    gift_catalog,
+    grants,
+    mail_service,
+    payments,
+    runtime_settings,
+    selfcheck,
+    vouchers,
+)
 from .. import protocol_catalog
 from .. import il2cpp_dump
 
@@ -186,21 +195,57 @@ def _mail_instance_rows(limit=100):
     for row in rows:
         item = dict(row)
         item["items"] = mail_service._items(item.get("items_json"))
+        item["item_rows"] = gift_catalog.item_rows(item["items"])
         item["style"] = mail_service._json(item.get("style_json"), {})
         result.append(item)
     return result
 
 
 def _mail_form_values(form):
-    raw_items = str(form.get("items") or "").strip()
     items = None
-    if raw_items:
+    raw_ids = [str(value).strip() for value in form.getlist("item_id") if str(value).strip()]
+    if raw_ids:
+        catalog = game_data.resource_catalog()
+        raw_counts = [str(value) for value in form.getlist("item_count")]
+        items = []
+        for index, item_id in enumerate(raw_ids):
+            meta = catalog.get(item_id)
+            if not meta:
+                raise ValueError(f"不存在的资源 ID：{item_id}")
+            try:
+                count = int(raw_counts[index]) if index < len(raw_counts) else 1
+            except (TypeError, ValueError):
+                raise ValueError(f"资源数量无效：{item_id}")
+            if count <= 0 or count > 999999:
+                raise ValueError(f"资源数量必须在 1-999999 之间：{item_id}")
+            items.append({"id": item_id, "type": meta["type"], "count": count})
+    raw_items = str(form.get("items") or "").strip()
+    if items is None and raw_items:
         try:
             items = json.loads(raw_items)
         except json.JSONDecodeError as exc:
             raise ValueError(f"附件 JSON 格式错误：第 {exc.lineno} 行第 {exc.colno} 列") from exc
         if not isinstance(items, (list, dict)):
             raise ValueError("附件 JSON 必须是数组或包含 items 的对象")
+        if isinstance(items, dict):
+            items = items.get("items") or []
+        catalog = game_data.resource_catalog()
+        normalized = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("附件条目必须是对象")
+            item_id = str(item.get("id") or "").strip()
+            meta = catalog.get(item_id)
+            if not meta:
+                raise ValueError(f"不存在的资源 ID：{item_id or '(空)'}")
+            try:
+                count = int(item.get("count") or 1)
+            except (TypeError, ValueError):
+                raise ValueError(f"资源数量无效：{item_id}")
+            if count <= 0 or count > 999999:
+                raise ValueError(f"资源数量必须在 1-999999 之间：{item_id}")
+            normalized.append({"id": item_id, "type": meta["type"], "count": count})
+        items = normalized
     return {
         "template_id": _optional_int(form.get("template_id")),
         "sender": str(form.get("sender") or "").strip() or None,
@@ -295,6 +340,11 @@ def _account_page_context(account):
             }
         )
     mails = mail_service.list_for_uid(account["uid"])
+    for mail in mails:
+        mail["item_rows"] = gift_catalog.item_rows(mail.get("items") or [])
+    mail_templates = mail_service.templates()
+    for template in mail_templates:
+        template["resource_items"] = gift_catalog.item_rows(template.get("items") or [])
     orders = []
     for raw_order in _orders_for(account["id"]):
         order = dict(raw_order)
@@ -306,6 +356,22 @@ def _account_page_context(account):
         order["gift_name"] = gift_catalog.display_name(order.get("good_id"))
         orders.append(order)
     granted_orders = sum(1 for order in orders if _int(order["granted"], 0))
+    debt_rows = []
+    for debt in grants.debt_rows(user):
+        parts = str(debt["key"]).split(":")
+        item_type = parts[0] if parts else ""
+        item_id = parts[-1] if parts else debt["key"]
+        detail = gift_catalog.item_rows(
+            [{"id": item_id, "type": item_type, "count": debt["count"]}]
+        )
+        debt_rows.append(
+            {
+                **debt,
+                "id": item_id,
+                "type": item_type,
+                "name": detail[0]["name"] if detail else item_id,
+            }
+        )
     return {
         "account": account,
         "user": user,
@@ -320,8 +386,9 @@ def _account_page_context(account):
         "skin_catalog": skin_catalog,
         "avatar_catalog": avatar_catalog,
         "mails": mails,
-        "mail_templates": mail_service.templates(),
+        "mail_templates": mail_templates,
         "orders": orders,
+        "debt_rows": debt_rows,
         "summary": {
             "inventory": len(inventory_rows),
             "characters": len(character_rows),
@@ -332,8 +399,111 @@ def _account_page_context(account):
             "unread_mails": len([mail for mail in mails if not int(mail.get("removed") or 0) and not int(mail.get("state") or 0)]),
             "orders": len(orders),
             "granted_orders": granted_orders,
+            "debt": len(debt_rows),
         },
     }
+
+
+
+def _order_rows(q="", status="", platform="", limit=500):
+    where = []
+    params = []
+    if q:
+        needle = f"%{q.strip()}%"
+        where.append(
+            "(o.order_id LIKE ? OR o.good_id LIKE ? OR o.product_name LIKE ? OR a.phone LIKE ? OR a.nickname LIKE ? OR CAST(o.uid AS TEXT) LIKE ?)"
+        )
+        params.extend([needle] * 6)
+    if status == "pending":
+        where.append("o.status=0 AND o.revoked=0")
+    elif status == "approved":
+        where.append("o.status=1 AND o.revoked=0")
+    elif status == "rejected":
+        where.append("o.status=2")
+    elif status == "revoked":
+        where.append("o.revoked=1")
+    if platform in {"android", "ios"}:
+        where.append("o.platform=?")
+        params.append(platform)
+    sql = """SELECT o.*, a.phone, a.nickname, a.platform AS account_platform,
+                    v.code AS voucher_code, v.name AS voucher_name
+             FROM orders o LEFT JOIN accounts a ON a.id=o.account_id
+             LEFT JOIN vouchers v ON v.id=o.voucher_id"""
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY o.created_at DESC, o.order_id DESC LIMIT ?"
+    params.append(int(limit))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    result = []
+    for raw in rows:
+        row = dict(raw)
+        try:
+            items = json.loads(row.get("granted_items_json") or "[]")
+        except Exception:
+            items = []
+        if not items:
+            try:
+                items = payments.order_items(row)
+            except Exception:
+                items = []
+        row["gift_items"] = gift_catalog.item_rows(items)
+        try:
+            row["revoked_items"] = gift_catalog.item_rows(
+                json.loads(row.get("revoked_items_json") or "[]")
+            )
+        except Exception:
+            row["revoked_items"] = []
+        try:
+            row["revoke_debt"] = json.loads(row.get("revoke_debt_json") or "{}")
+        except Exception:
+            row["revoke_debt"] = {}
+        row["gift_name"] = gift_catalog.display_name(row.get("good_id")) or row.get("product_name")
+        result.append(row)
+    return result
+
+
+def _select_accounts(form):
+    scope = str(form.get("scope") or "uids")
+    with connect() as conn:
+        if scope == "all":
+            return conn.execute("SELECT * FROM accounts ORDER BY uid").fetchall()
+        if scope == "filter":
+            clauses = []
+            params = []
+            uid_min = _int(form.get("uid_min"), 0)
+            uid_max = _int(form.get("uid_max"), 0)
+            if uid_min:
+                clauses.append("uid>=?")
+                params.append(uid_min)
+            if uid_max:
+                clauses.append("uid<=?")
+                params.append(uid_max)
+            keyword = str(form.get("keyword") or "").strip()
+            if keyword:
+                clauses.append("(phone LIKE ? OR nickname LIKE ?)")
+                params.extend([f"%{keyword}%", f"%{keyword}%"])
+            platform = str(form.get("platform") or "").strip()
+            if platform in {"android", "ios"}:
+                clauses.append("platform=?")
+                params.append(platform)
+            sql = "SELECT * FROM accounts"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY uid"
+            return conn.execute(sql, params).fetchall()
+        raw = str(form.get("uids") or "")
+        uids = []
+        for part in raw.replace(";", ",").replace("\n", ",").split(","):
+            uid = _int(part.strip(), 0)
+            if uid and uid not in uids:
+                uids.append(uid)
+        if not uids:
+            return []
+        placeholders = ",".join("?" for _ in uids)
+        return conn.execute(
+            f"SELECT * FROM accounts WHERE uid IN ({placeholders}) ORDER BY uid", uids
+        ).fetchall()
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -817,6 +987,8 @@ async def mail_center(request: Request, edit: int = 0, q: str = ""):
     if redirect:
         return redirect
     templates_list = mail_service.templates()
+    for template in templates_list:
+        template["resource_items"] = gift_catalog.item_rows(template.get("items") or [])
     edit_template = next((item for item in templates_list if int(item["id"]) == int(edit)), None)
     mails = _mail_instance_rows(200)
     needle = q.strip().lower()
@@ -842,6 +1014,244 @@ async def mail_center(request: Request, edit: int = 0, q: str = ""):
             "message": _take_flash(request),
         },
     )
+
+
+@router.get("/orders", response_class=HTMLResponse)
+async def orders_page(
+    request: Request,
+    q: str = "",
+    status: str = "",
+    platform: str = "",
+):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    rows = _order_rows(q=q, status=status, platform=platform)
+    with connect() as conn:
+        accounts = conn.execute("SELECT * FROM accounts ORDER BY uid").fetchall()
+    return templates.TemplateResponse(
+        request,
+        "orders.html",
+        {
+            "admin": admin_name(request),
+            "active": "orders",
+            "orders": rows,
+            "accounts": accounts,
+            "products": sorted(payments.products(), key=lambda item: (item.get("name") or "", item.get("product_id") or "")),
+            "q": q,
+            "status_filter": status,
+            "platform_filter": platform,
+            "message": _take_flash(request),
+        },
+    )
+
+
+@router.post("/orders/create")
+async def orders_create(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    accounts = _select_accounts(form)
+    good_ids = [str(value) for value in form.getlist("good_ids") if value]
+    if not accounts or not good_ids:
+        _flash(request, "请选择至少一个账号和至少一个商品")
+        return RedirectResponse("/admin/orders", status_code=303)
+    mode = str(form.get("mode") or "pending")
+    note = str(form.get("note") or "").strip()
+    platform = str(form.get("platform") or "")
+    created = 0
+    for account in accounts:
+        for good_id in good_ids:
+            product = payments.find_product(None, good_id)
+            if not product:
+                continue
+            order = payments.create_order(
+                dict(account),
+                product["store_id"],
+                good_id,
+                platform if platform in {"android", "ios"} else account["platform"],
+                origin="admin",
+                created_by=admin_name(request),
+                evaluate_voucher=False,
+                replace_pending=False,
+            )
+            if not order:
+                continue
+            created += 1
+            if note:
+                with connect() as conn:
+                    conn.execute(
+                        "UPDATE orders SET admin_note=? WHERE order_id=?",
+                        (note, order["order_id"]),
+                    )
+            if mode == "approve":
+                payments.admin_approve_order(order["order_id"], actor=admin_name(request))
+            elif mode == "reject":
+                payments.admin_reject_order(order["order_id"], actor=admin_name(request), reason=note)
+    _flash(request, f"已创建 {created} 个订单")
+    return RedirectResponse("/admin/orders", status_code=303)
+
+
+@router.post("/orders/bulk")
+async def orders_bulk(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    order_ids = [str(value) for value in form.getlist("order_ids") if value]
+    action = str(form.get("action") or "")
+    reason = str(form.get("reason") or "").strip()
+    changed = 0
+    for order_id in order_ids:
+        if action == "approve":
+            result = payments.admin_approve_order(order_id, actor=admin_name(request))
+        elif action == "reject":
+            result = payments.admin_reject_order(order_id, actor=admin_name(request), reason=reason)
+        elif action == "pending":
+            result = payments.admin_set_pending(order_id, note=reason)
+        else:
+            result = {"result": 2}
+        if result.get("result") == 0:
+            changed += 1
+    _flash(request, f"已处理 {changed} / {len(order_ids)} 个订单")
+    return RedirectResponse("/admin/orders", status_code=303)
+
+
+@router.post("/orders/{order_id}/action")
+async def order_action(order_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    action = str(form.get("action") or "")
+    reason = str(form.get("reason") or "").strip()
+    if action == "approve":
+        result = payments.admin_approve_order(order_id, actor=admin_name(request))
+    elif action == "reject":
+        result = payments.admin_reject_order(order_id, actor=admin_name(request), reason=reason)
+    else:
+        result = payments.admin_set_pending(order_id, note=reason)
+    _flash(request, "订单已更新" if result.get("result") == 0 else f"操作失败：{result.get('error', 'unknown')}")
+    return RedirectResponse("/admin/orders", status_code=303)
+
+
+def _parse_local_dt(value):
+    value = str(value or "").strip()
+    if not value:
+        return 0
+    try:
+        import time as _time
+
+        return int(_time.mktime(_time.strptime(value, "%Y-%m-%dT%H:%M")))
+    except Exception:
+        return 0
+
+
+@router.get("/vouchers", response_class=HTMLResponse)
+async def vouchers_page(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    with connect() as conn:
+        accounts = conn.execute("SELECT * FROM accounts ORDER BY uid").fetchall()
+    voucher_rows = vouchers.list_vouchers()
+    for row in voucher_rows:
+        row["scope_text"] = vouchers.scope_summary(row.get("scope") or {})
+    return templates.TemplateResponse(
+        request,
+        "vouchers.html",
+        {
+            "admin": admin_name(request),
+            "active": "vouchers",
+            "vouchers": voucher_rows,
+            "accounts": accounts,
+            "products": sorted(payments.products(), key=lambda item: (item.get("name") or "", item.get("product_id") or "")),
+            "message": _take_flash(request),
+        },
+    )
+
+
+@router.post("/vouchers")
+async def voucher_create(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    name = str(form.get("name") or "").strip() or "代金券"
+    code = str(form.get("code") or "").strip()
+    account_scope = str(form.get("account_scope") or "one")
+    uid = _int(form.get("uid"), 0)
+    scope_type = str(form.get("scope_type") or "all")
+    goods = [str(value) for value in form.getlist("goods") if value]
+    categories = [str(value) for value in form.getlist("categories") if value]
+    platform = str(form.get("platform") or "")
+    max_amount = _int(form.get("max_amount_yuan"), 0) * 100
+    uses = _int(form.get("uses"), 1)
+    if uses == 0:
+        uses = -1
+    start_at = _parse_local_dt(form.get("start_at"))
+    end_at = _parse_local_dt(form.get("end_at"))
+    scope = {
+        "goods": goods if scope_type in {"goods", "mixed"} else [],
+        "categories": categories if scope_type in {"categories", "mixed"} else (["all"] if scope_type == "all" else []),
+        "platform": platform if platform in {"android", "ios"} else "any",
+    }
+    if scope_type in {"categories", "mixed"} and not categories:
+        _flash(request, "选择商品类别范围时至少要勾选一个类别")
+        return RedirectResponse("/admin/vouchers", status_code=303)
+    if scope_type in {"goods", "mixed"} and not goods:
+        _flash(request, "选择指定商品范围时至少要选择一个商品")
+        return RedirectResponse("/admin/vouchers", status_code=303)
+    with connect() as conn:
+        if account_scope == "all":
+            accounts = conn.execute("SELECT * FROM accounts ORDER BY uid").fetchall()
+        else:
+            accounts = conn.execute("SELECT * FROM accounts WHERE uid=?", (uid,)).fetchall()
+    if not accounts:
+        _flash(request, "没有找到适用账号")
+        return RedirectResponse("/admin/vouchers", status_code=303)
+    created = 0
+    for account in accounts:
+        voucher_code = code or vouchers.new_code()
+        if len(accounts) > 1 and code:
+            voucher_code = f"{code}-{account['uid']}"
+        try:
+            vouchers.create_voucher(
+                name=name,
+                code=voucher_code,
+                account_id=account["id"],
+                account_uid=account["uid"],
+                scope=scope,
+                max_amount=max_amount,
+                uses=uses,
+                start_at=start_at,
+                end_at=end_at,
+            )
+            created += 1
+        except sqlite3.IntegrityError:
+            continue
+    _flash(request, f"已创建 {created} 张代金券")
+    return RedirectResponse("/admin/vouchers", status_code=303)
+
+
+@router.post("/vouchers/{voucher_id}/status")
+async def voucher_status(voucher_id: int, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    vouchers.set_status(voucher_id, 1 if str(form.get("status")) == "1" else 0)
+    return RedirectResponse("/admin/vouchers", status_code=303)
+
+
+@router.post("/vouchers/{voucher_id}/delete")
+async def voucher_delete(voucher_id: int, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    vouchers.delete_voucher(voucher_id)
+    return RedirectResponse("/admin/vouchers", status_code=303)
 
 
 @router.get("/gifts", response_class=HTMLResponse)
@@ -884,6 +1294,14 @@ async def gifts_page(request: Request, q: str = ""):
             "cash_rows": cash_rows,
         },
     )
+
+
+@router.get("/api/resources")
+async def resource_search_api(request: Request, q: str = "", limit: int = 80):
+    redirect = need_login(request)
+    if redirect:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    return {"items": game_data.resource_search(q, limit=min(max(limit, 1), 200))}
 
 
 @router.post("/mail/templates")

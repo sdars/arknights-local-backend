@@ -102,6 +102,82 @@ def _coalesce(items):
     return [merged[key] for key in order]
 
 
+def _debt_map(user):
+    debt = user.get("revokeDebt")
+    if not isinstance(debt, dict):
+        debt = {}
+        user["revokeDebt"] = debt
+    return debt
+
+
+def _debtable(item_type):
+    return (
+        item_type in {"GOLD", "DIAMOND", "FURN", "MCARD_VOUCHER", "RENAMING_CARD"}
+        or item_type in STATUS_CURRENCIES
+        or item_type in INVENTORY_TYPES
+        or "VOUCHER" in item_type
+    )
+
+
+def _debt_key(user, item, platform=None):
+    if not _debtable(item["type"]):
+        return ""
+    if item["type"] == "DIAMOND":
+        return f"DIAMOND:{diamond_status_key(user, platform)}:{item['id']}"
+    return f"{item['type']}:{item['id']}"
+
+
+def _offset_debt(user, item, platform=None):
+    key = _debt_key(user, item, platform=platform)
+    if not key:
+        return item
+    debt = _debt_map(user)
+    amount = _int(debt.get(key), 0)
+    if amount <= 0:
+        return item
+    used = min(amount, item["count"])
+    remaining = amount - used
+    if remaining:
+        debt[key] = remaining
+    else:
+        debt.pop(key, None)
+    if used >= item["count"]:
+        return None
+    result = dict(item)
+    result["count"] = item["count"] - used
+    return result
+
+
+def clear_debt(user, items, platform=None):
+    debt = _debt_map(user)
+    for item in _coalesce(items):
+        key = _debt_key(user, item, platform=platform)
+        if not key:
+            continue
+        remaining = max(0, _int(debt.get(key), 0) - item["count"])
+        if remaining:
+            debt[key] = remaining
+        else:
+            debt.pop(key, None)
+    return debt
+
+
+def clear_debt_map(user, mapping):
+    debt = _debt_map(user)
+    for key, value in (mapping or {}).items():
+        remaining = max(0, _int(debt.get(key), 0) - _int(value, 0))
+        if remaining:
+            debt[key] = remaining
+        else:
+            debt.pop(key, None)
+    return debt
+
+
+def debt_rows(user):
+    debt = _debt_map(user)
+    return [{"key": key, "count": value} for key, value in sorted(debt.items()) if value]
+
+
 def _ensure_skin(user):
     skin = _dict(user, "skin")
     _dict(skin, "skinTs")
@@ -255,8 +331,15 @@ def _grant_item(user, item, source, now, touched, platform=None):
             for child in pack.get("content") or []:
                 child_item = _normalize(child)
                 if child_item:
-                    _grant_item(user, child_item, source, now, touched)
+                    _grant_item(user, child_item, source, now, touched, platform=platform)
         return
+
+    item = _offset_debt(user, item, platform=platform)
+    if not item:
+        return
+    item_id = item["id"]
+    item_type = item["type"]
+    count = item["count"]
 
     if item_type == "OPEN_SERVER_CREDIT":
         open_server = _dict(user, "openServerV3")
@@ -357,6 +440,213 @@ def _grant_item(user, item, source, now, touched, platform=None):
         slot = _ensure_consumable(user, item_id)
         _add(slot, "count", count)
         touched.add("consumable")
+
+
+def _take_status(user, key, amount):
+    status = _dict(user, "status")
+    have = _int(status.get(key), 0)
+    take = min(max(0, have), amount)
+    status[key] = have - take
+    return take, amount - take
+
+
+def _take_inventory(user, item_id, amount):
+    inventory = _dict(user, "inventory")
+    have = _int(inventory.get(item_id), 0)
+    take = min(max(0, have), amount)
+    if take:
+        if take >= have:
+            inventory.pop(item_id, None)
+        else:
+            inventory[item_id] = have - take
+    return take, amount - take
+
+
+def _take_consumable(user, item_id, amount):
+    consumable = _dict(user, "consumable")
+    node = consumable.get(item_id)
+    if not isinstance(node, dict):
+        return 0, amount
+    slot = node.get("0")
+    if not isinstance(slot, dict):
+        return 0, amount
+    have = _int(slot.get("count"), 0)
+    take = min(max(0, have), amount)
+    slot["count"] = have - take
+    return take, amount - take
+
+
+def _take_char(user, char_id, amount):
+    troop = _dict(user, "troop")
+    chars = _dict(troop, "chars")
+    building = _dict(user, "building")
+    building_chars = _dict(building, "chars")
+    removed = 0
+    for inst_id in list(chars):
+        value = chars.get(inst_id)
+        if not isinstance(value, dict) or value.get("charId") != char_id:
+            continue
+        chars.pop(inst_id, None)
+        building_chars.pop(str(inst_id), None)
+        for squad in (_dict(troop, "squads")).values():
+            if not isinstance(squad, dict):
+                continue
+            for index, slot in enumerate(squad.get("slots") or []):
+                if isinstance(slot, dict) and str(slot.get("charInstId") or "") == str(inst_id):
+                    squad["slots"][index] = None
+        removed += 1
+        if removed >= amount:
+            break
+    if not any(isinstance(value, dict) and value.get("charId") == char_id for value in chars.values()):
+        _dict(troop, "charGroup").pop(char_id, None)
+    inventory_take = 0
+    if removed < amount:
+        inventory_take, _ = _take_inventory(user, f"p_{char_id}", amount - removed)
+    return removed + inventory_take, amount - removed - inventory_take
+
+
+def _take_item(user, item, now, platform, touched):
+    item_id = item["id"]
+    item_type = item["type"]
+    count = item["count"]
+
+    if item_type == "ITEM_PACK":
+        pack = game_data.item_pack(item_id) or {}
+        actual = 0
+        short = 0
+        for _ in range(count):
+            for child in pack.get("content") or []:
+                child_item = _normalize(child)
+                if not child_item:
+                    continue
+                child_actual, child_short = _take_item(
+                    user, child_item, now, platform, touched
+                )
+                actual += child_actual
+                short += child_short
+        return actual, short
+
+    if item_type == "CHAR":
+        take, short = _take_char(user, item_id, count)
+        touched.update(("troop", "building", "inventory"))
+        return take, short
+
+    if item_type == "CHAR_SKIN":
+        skin = _ensure_skin(user)
+        present = item_id in skin["characterSkins"]
+        skin["characterSkins"].pop(item_id, None)
+        skin["skinTs"].pop(item_id, None)
+        touched.add("skin")
+        return (1 if present else 0), (0 if present else count)
+
+    if item_type == "PLAYER_AVATAR":
+        avatar = _ensure_avatar(user)
+        present = item_id in avatar["avatar_icon"]
+        avatar["avatar_icon"].pop(item_id, None)
+        touched.add("avatar")
+        return (1 if present else 0), (0 if present else count)
+
+    if item_type == "HOME_THEME":
+        themes = _dict(_dict(user, "homeTheme"), "themes")
+        present = item_id in themes
+        themes.pop(item_id, None)
+        touched.add("homeTheme")
+        return (1 if present else 0), (0 if present else count)
+
+    if item_type == "HOME_BACKGROUND":
+        bgs = _dict(_dict(user, "background"), "bgs")
+        present = item_id in bgs
+        bgs.pop(item_id, None)
+        touched.add("background")
+        return (1 if present else 0), (0 if present else count)
+
+    if item_type == "FURN":
+        furniture = _dict(_dict(user, "building"), "furniture")
+        slot = furniture.get(item_id)
+        have = _int(slot.get("count"), 0) if isinstance(slot, dict) else 0
+        take = min(max(0, have), count)
+        if isinstance(slot, dict):
+            if take >= have:
+                furniture.pop(item_id, None)
+            else:
+                slot["count"] = have - take
+        touched.add("building")
+        return take, count - take
+
+    if item_type == "EMOTICON_SET":
+        emoticon = _dict(user, "emoticon")
+        themes = _list(emoticon, "unlockTheme")
+        present = item_id in themes
+        if present:
+            themes.remove(item_id)
+        inventory_take, _ = _take_inventory(user, item_id, 1 if present else count)
+        touched.update(("emoticon", "inventory"))
+        take = 1 if present else inventory_take
+        return take, count - take
+
+    if item_type == "MCARD_VOUCHER":
+        take, short = _take_inventory(user, item_id, count)
+        if short:
+            consumed, short = _take_consumable(user, item_id, short)
+            take += consumed
+        if take:
+            status = _dict(user, "status")
+            end = _int(status.get("monthlySubscriptionEndTime"), 0)
+            if end:
+                new_end = max(now, end - take * 30 * 86400)
+                status["monthlySubscriptionEndTime"] = new_end
+                status["tipMonthlyCardExpireTs"] = new_end
+                if new_end <= now:
+                    status["monthlySubscriptionStartTime"] = 0
+                    status["monthlySubscriptionEndTime"] = 0
+            touched.add("status")
+        touched.update(("inventory", "consumable"))
+        return take, short
+
+    if item_type == "GOLD":
+        take, short = _take_status(user, "gold", count)
+        touched.add("status")
+        return take, short
+
+    if item_type == "DIAMOND":
+        take, short = _take_status(user, diamond_status_key(user, platform), count)
+        touched.add("status")
+        return take, short
+
+    if item_type in STATUS_CURRENCIES:
+        take, short = _take_status(user, STATUS_CURRENCIES[item_type], count)
+        touched.add("status")
+        return take, short
+
+    take, short = _take_inventory(user, item_id, count)
+    if short:
+        consumed, short = _take_consumable(user, item_id, short)
+        take += consumed
+        touched.add("consumable")
+    touched.add("inventory")
+    return take, short
+
+
+def revoke_items(user, items, source="revoke", now=None, platform=None):
+    now = int(now or time.time())
+    normalized = _coalesce(items)
+    touched = set()
+    revoked = []
+    debt = {}
+    for item in normalized:
+        actual, short = _take_item(user, item, now, platform, touched)
+        if actual:
+            revoked.append({"id": item["id"], "type": item["type"], "count": actual})
+        if short:
+            key = _debt_key(user, item, platform=platform)
+            if key:
+                debt[key] = _int(debt.get(key), 0) + short
+    if debt:
+        current = _debt_map(user)
+        for key, value in debt.items():
+            current[key] = _int(current.get(key), 0) + value
+    modified = {key: user.get(key) for key in sorted(touched) if key in user}
+    return revoked, debt, {"deleted": {}, "modified": modified}
 
 
 def apply_items(user, items, source="unknown", now=None, platform=None):
