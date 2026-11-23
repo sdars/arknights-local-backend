@@ -444,6 +444,7 @@ def _gacha_rows(q="", status=""):
                 "open_text": _format_ts(start),
                 "end_text": _format_ts(end),
                 "is_active": active,
+                "client_visible": bool(gacha_service.base_pool(pool_id)),
                 "rate6": _float(row.get("rate6"), row.get("rate6") if row.get("rate6") is not None else ""),
             }
         )
@@ -590,6 +591,7 @@ def _gacha_edit_context(pool_id):
     options, names = _character_options()
     meta["open_text"] = _format_ts(meta.get("openTime"))
     meta["end_text"] = _format_ts(meta.get("endTime"))
+    meta["client_visible"] = bool(gacha_service.base_pool(pool_id))
     meta["rate6_percent"] = round(rates.get(5, 0.02) * 100, 3)
     meta["rate5_percent"] = round(rates.get(4, 0.08) * 100, 3)
     meta["rate4_percent"] = round(rates.get(3, 0.5) * 100, 3)

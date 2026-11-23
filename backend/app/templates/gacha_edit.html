@@ -15,6 +15,9 @@
 </header>
 
 {% if message %}<div class="alert">{{ message }}</div>{% endif %}
+{% if not pool.client_visible %}
+<div class="alert">该卡池 ID 不在客户端静态 gacha_table 中，游戏内不会显示。要上线到游戏，请编辑一个已有池位（可选用已关闭的旧池），或更新客户端 gacha_table 资源。</div>
+{% endif %}
 
 <section class="panel">
   <div class="panel-head"><h2>基础属性</h2><span class="muted">保存后立即影响 /gacha/getPoolDetail 与抽卡结算</span></div>
