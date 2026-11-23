@@ -63,6 +63,7 @@ def test_confirm_mission_grants_and_persists(client, login, test_account):
 
     after = _user(test_account["uid"])
     assert after["mission"]["missions"]["MAIN"]["main_1"]["state"] == 3
+    assert after["mission"]["missions"]["MAIN"]["main_2"]["state"] == 2
     assert after["inventory"].get("2001", 0) == before_cards + 5
 
 
@@ -165,6 +166,15 @@ def test_mission_repair_restores_cleared_main_stage():
     }
     missions.ensure_mission_state(user)
     assert user["mission"]["missions"]["MAIN"]["main_1"]["state"] == 2
+
+
+def test_current_main_mission_stays_visible_before_it_is_complete():
+    user = _template()
+    missions.ensure_mission_state(user)
+    main = user["mission"]["missions"]["MAIN"]
+    assert main["main_1"]["state"] == 2
+    assert main["main_1"]["progress"] == [{"value": 0, "target": 1}]
+    assert "main_2" not in main
 
 
 def test_stage_clear_progresses_visible_daily_mission():

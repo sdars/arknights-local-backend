@@ -157,12 +157,14 @@ def ensure_main_mission_chain(user):
                 bucket.pop(mission_id, None)
             continue
         node = existing if isinstance(existing, dict) else {"state": 1, "progress": []}
-        was_claimable = int(node.get("state", 0) or 0) == 2
-        # A stage can be reset from the account console while an older save
-        # still has its mission at the claimable state.  Only state 3 means the
-        # reward was actually claimed; an uncleared stage must be active again.
-        node["state"] = 1
-        if was_claimable or not node.get("progress"):
+        # The client's MAIN page only includes MissionHoldingState.CONFIRMED
+        # rows.  For a main mission that is the visible "current task" state,
+        # not necessarily a claimable reward; actual claiming is guarded by the
+        # progress target in claim_missions.
+        node["state"] = 2
+        if template in {"CompleteMainStage", "CompleteStage"}:
+            node["progress"] = [{"value": 0, "target": 1}]
+        elif not node.get("progress"):
             node["progress"] = [{"value": 0, "target": 1}]
         bucket[mission_id] = node
         activated = True
@@ -282,6 +284,7 @@ def claim_missions(user, mission_ids, source="mission"):
         _activate_next(user, mission_id, mission_type)
         claimed.append(mission_id)
 
+    ensure_main_mission_chain(user)
     granted_items, delta = grants.apply_items(user, reward_items, source=source)
     delta["modified"]["mission"] = user.get("mission", {})
     return _success(granted_items, {"playerDataDelta": delta, "claimed": claimed, "skipped": skipped})
