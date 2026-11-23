@@ -297,4 +297,13 @@ def test_admin_mainline_sync_marks_early_stages_passed(client, login, test_accou
     assert synced["status"]["progress"] >= 1100
     assert synced["status"]["flags"]["obt/guide/l0-1/0_mission_main"] == 1
     assert synced["status"]["flags"]["obt/guide/l0-1/1_training_level"] == 1
+    assert synced["status"]["flags"]["obt/guide/shop/0_main_and_extraqc"] == 1
+    audit = client.get(
+        f"{client.base_url}/admin/api/tutorial-audit",
+        params={"uid": uid},
+        timeout=15,
+    ).json()
+    assert audit["ok"] is True
+    assert audit["missing"] == []
+    assert audit["satisfied"] > 0
 

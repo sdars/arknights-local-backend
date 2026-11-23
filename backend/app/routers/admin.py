@@ -1708,6 +1708,20 @@ async def resource_search_api(request: Request, q: str = "", limit: int = 80):
     return {"items": game_data.resource_search(q, limit=min(max(limit, 1), 200))}
 
 
+@router.get("/api/tutorial-audit")
+async def tutorial_audit_api(request: Request, uid: int = 0):
+    redirect = need_login(request)
+    if redirect:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    account = _account(uid)
+    if not account:
+        return JSONResponse({"error": "account not found"}, status_code=404)
+    user = _user(account)
+    if battles.reconcile_tutorial_state(user):
+        _save_user(uid, user)
+    return {"uid": uid, **battles.tutorial_audit(user)}
+
+
 @router.post("/mail/templates")
 async def mail_template_save(request: Request):
     redirect = need_login(request)

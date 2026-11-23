@@ -97,6 +97,7 @@ async def sync_data(request: Request):
     if not account:
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
+    battles.reconcile_tutorial_state(user)
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
@@ -123,6 +124,7 @@ async def sync_status(request: Request):
     except Exception:
         body = {}
     user = player_data(account)
+    battles.reconcile_tutorial_state(user)
     ts = now_ts()
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
@@ -181,6 +183,7 @@ async def sync_push_message(request: Request):
     if not account:
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
+    battles.reconcile_tutorial_state(user)
     ts = now_ts()
     status = user.setdefault("status", {})
     status["lastOnlineTs"] = ts

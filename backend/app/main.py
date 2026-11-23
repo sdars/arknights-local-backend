@@ -7,7 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import APP_DIR, SECRET_KEY
 from .db import init_db, log_request
-from . import mail_service, payments
+from . import battles, mail_service, payments
 from .routers import admin, config_api, game, sdk
 
 app = FastAPI(title="Arknights Local Backend", docs_url=None, redoc_url=None)
@@ -58,6 +58,10 @@ async def on_startup():
         pass
     try:
         mail_service.seed_templates()
+    except Exception:
+        pass
+    try:
+        battles.repair_account_tutorial_states()
     except Exception:
         pass
 
