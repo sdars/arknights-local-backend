@@ -966,8 +966,48 @@ def _sync_skill_unlocks(char, meta):
         char["defaultSkillIndex"] = unlocked[0] if unlocked else -1
 
 
-def _char_response(user, touched=("troop", "inventory", "status")):
-    modified = {key: user.get(key) for key in touched if key in user}
+def _char_response(
+    user,
+    char_inst_id=None,
+    *,
+    char_fields=None,
+    full_char=False,
+    char_inst_ids=None,
+    inventory_ids=(),
+    status_keys=(),
+):
+    """Build the partial PlayerDataDelta shape used by charBuild endpoints.
+
+    The client's incremental delta applier expects ``troop.chars`` to contain
+    only the changed character entry.  Sending the whole ``troop`` object made
+    the upgrade page keep its cached character until the page was left and
+    reopened, even though the server had already persisted the new level.
+    """
+    modified = {}
+    ids = list(char_inst_ids or ([] if char_inst_id is None else [char_inst_id]))
+    if ids:
+        chars = ((user.get("troop") or {}).get("chars") or {})
+        changed = {}
+        for raw_id in ids:
+            inst_id = str(raw_id)
+            char = chars.get(inst_id)
+            if not isinstance(char, dict):
+                continue
+            if full_char or char_fields is None:
+                payload = char
+            else:
+                payload = {key: char.get(key) for key in char_fields}
+            changed[inst_id] = payload
+        if changed:
+            modified["troop"] = {"chars": changed}
+    if inventory_ids:
+        inventory = user.get("inventory") or {}
+        modified["inventory"] = {
+            str(item_id): _as_int(inventory.get(str(item_id)), 0) for item_id in inventory_ids
+        }
+    if status_keys:
+        status = user.get("status") or {}
+        modified["status"] = {str(key): status.get(key) for key in status_keys}
     return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": modified}}
 
 
@@ -1013,6 +1053,7 @@ async def char_build_upgrade_char(request: Request):
     inventory = user.setdefault("inventory", {})
     exp_values = {"2001": 200, "2002": 400, "2003": 1000, "2004": 2000}
     gained = 0
+    used_item_ids = []
     for raw in body.get("expMats") or []:
         if not isinstance(raw, dict):
             continue
@@ -1027,6 +1068,8 @@ async def char_build_upgrade_char(request: Request):
             inventory.pop(item_id, None)
         else:
             inventory[item_id] = have - count
+        if item_id not in used_item_ids:
+            used_item_ids.append(item_id)
         gained += exp_values[item_id] * count
     total_exp += gained
     gold = _as_int((user.get("status") or {}).get("gold"), 0)
@@ -1042,7 +1085,13 @@ async def char_build_upgrade_char(request: Request):
     char["level"] = level
     char["exp"] = total_exp
     save_player(account, user)
-    return _char_response(user)
+    return _char_response(
+        user,
+        inst_id,
+        char_fields=("level", "exp", "favorPoint"),
+        inventory_ids=used_item_ids,
+        status_keys=("gold",),
+    )
 
 
 @router.post("/charBuild/evolveChar")
@@ -1068,6 +1117,32 @@ async def char_build_evolve_char(request: Request):
     costs = _gamedata_const().get("evolveGoldCost") or []
     row = costs[rarity - 1] if 0 < rarity <= len(costs) else []
     cost = _as_int(row[dest - 1] if 0 < dest <= len(row) else 0, 0)
+    inventory = user.setdefault("inventory", {})
+    used_item_ids = []
+    for raw in (phases[dest] or {}).get("evolveCost") or []:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or "")
+        count = _as_int(raw.get("count"), 0)
+        if not item_id or count <= 0:
+            continue
+        have = _as_int(inventory.get(item_id), 0)
+        if have < count:
+            return {"result": 1, "error": f"{item_id} 不足"}
+        if item_id not in used_item_ids:
+            used_item_ids.append(item_id)
+    for raw in (phases[dest] or {}).get("evolveCost") or []:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or "")
+        count = _as_int(raw.get("count"), 0)
+        if not item_id or count <= 0:
+            continue
+        have = _as_int(inventory.get(item_id), 0)
+        if have == count:
+            inventory.pop(item_id, None)
+        else:
+            inventory[item_id] = have - count
     status = user.setdefault("status", {})
     if cost > 0 and _as_int(status.get("gold"), 0) < cost:
         return {"result": 1, "error": "龙门币不足"}
@@ -1077,7 +1152,13 @@ async def char_build_evolve_char(request: Request):
     char["level"] = min(_as_int(char.get("level"), 1), _phase_max_level(meta, dest))
     _sync_skill_unlocks(char, meta)
     save_player(account, user)
-    return _char_response(user)
+    return _char_response(
+        user,
+        inst_id,
+        full_char=True,
+        inventory_ids=used_item_ids,
+        status_keys=("gold",),
+    )
 
 
 @router.post("/charBuild/evolveCharUseItem")
@@ -1107,8 +1188,14 @@ async def char_build_level_max_item(request: Request):
         else:
             inventory[item_id] = have - 1
     char["level"] = _phase_max_level(game_data.character(char.get("charId")) or {}, _as_int(char.get("evolvePhase"), 0))
+    char["exp"] = 0
     save_player(account, user)
-    return _char_response(user)
+    return _char_response(
+        user,
+        inst_id,
+        char_fields=("level", "exp"),
+        inventory_ids=(item_id,) if item_id else (),
+    )
 
 
 @router.post("/charBuild/upgradeSkill")
@@ -1126,6 +1213,7 @@ async def char_build_upgrade_skill(request: Request):
     meta = game_data.character(char.get("charId")) or {}
     chain = meta.get("allSkillLvlup") or []
     index = target - 2
+    used_item_ids = []
     if index >= 0 and index < len(chain):
         inventory = user.setdefault("inventory", {})
         for cost in (chain[index] or {}).get("lvlUpCost") or []:
@@ -1140,9 +1228,16 @@ async def char_build_upgrade_skill(request: Request):
                 inventory.pop(item_id, None)
             else:
                 inventory[item_id] = have - count
+            if item_id not in used_item_ids:
+                used_item_ids.append(item_id)
     char["mainSkillLvl"] = target
     save_player(account, user)
-    return _char_response(user)
+    return _char_response(
+        user,
+        inst_id,
+        char_fields=("mainSkillLvl",),
+        inventory_ids=used_item_ids,
+    )
 
 
 @router.post("/charBuild/boostPotential")
@@ -1170,7 +1265,12 @@ async def char_build_boost_potential(request: Request):
             inventory[item_id] = have - amount
     char["potentialRank"] = target
     save_player(account, user)
-    return _char_response(user)
+    return _char_response(
+        user,
+        inst_id,
+        char_fields=("potentialRank",),
+        inventory_ids=(item_id,) if item_id else (),
+    )
 
 
 @router.post("/charBuild/setDefaultSkill")
@@ -1180,7 +1280,8 @@ async def char_build_set_default_skill(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
-    char, _ = _char_by_inst(user, body.get("charInstId"))
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
         return {"result": 1, "error": "char not found"}
     index = _as_int(body.get("defaultSkillIndex"), -1)
@@ -1189,7 +1290,7 @@ async def char_build_set_default_skill(request: Request):
         return {"result": 1, "error": "skill not unlocked"}
     char["defaultSkillIndex"] = index
     save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, inst_id, char_fields=("defaultSkillIndex",))
 
 
 @router.post("/charBuild/setEquipment")
@@ -1199,13 +1300,14 @@ async def char_build_set_equipment(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
-    char, _ = _char_by_inst(user, body.get("charInstId"))
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
         return {"result": 1, "error": "char not found"}
     equip_id = str(body.get("equipId") or body.get("equip") or "")
     char["currentEquip"] = equip_id or None
     save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, inst_id, char_fields=("currentEquip",))
 
 
 @router.post("/charBuild/unlockEquipment")
@@ -1215,7 +1317,8 @@ async def char_build_unlock_equipment(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
-    char, _ = _char_by_inst(user, body.get("charInstId"))
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
         return {"result": 1, "error": "char not found"}
     equip_id = str(body.get("equipId") or "")
@@ -1225,7 +1328,7 @@ async def char_build_unlock_equipment(request: Request):
         node.setdefault("level", 1)
         node.setdefault("hide", 0)
     save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, inst_id, char_fields=("equip",))
 
 
 @router.post("/charBuild/upgradeEquipment")
@@ -1235,7 +1338,8 @@ async def char_build_upgrade_equipment(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
-    char, _ = _char_by_inst(user, body.get("charInstId"))
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
         return {"result": 1, "error": "char not found"}
     equip_id = str(body.get("equipId") or "")
@@ -1244,7 +1348,7 @@ async def char_build_upgrade_equipment(request: Request):
         node["locked"] = 0
         node["level"] = max(1, min(3, _as_int(body.get("targetLevel"), _as_int(node.get("level"), 1))))
     save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, inst_id, char_fields=("equip",))
 
 
 @router.post("/charBuild/setCharVoiceLan")
@@ -1264,7 +1368,7 @@ async def char_build_set_voice(request: Request):
         if isinstance(char, dict):
             char["voiceLan"] = voice
     save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, char_inst_ids=ids, char_fields=("voiceLan",))
 
 
 @router.post("/charBuild/batchSetCharVoiceLan")
@@ -1279,13 +1383,14 @@ async def char_build_change_skin(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
-    char, _ = _char_by_inst(user, body.get("charInstId"))
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
     if isinstance(char, dict):
         skin = body.get("skinId") or body.get("skin")
         if skin:
             char["skin"] = str(skin)
         save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, inst_id, char_fields=("skin",))
 
 
 @router.post("/charBuild/upgradeSpecializedSkillUseItem")
@@ -1295,14 +1400,15 @@ async def char_build_specialize(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
-    char, _ = _char_by_inst(user, body.get("charInstId"))
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
     if isinstance(char, dict):
         skills = char.get("skills") or []
         index = _as_int(body.get("skillIndex"), 0)
         if 0 <= index < len(skills) and isinstance(skills[index], dict):
             skills[index]["specializeLevel"] = max(0, min(3, _as_int(body.get("targetLevel"), 1)))
         save_player(account, user)
-    return _char_response(user, ("troop",))
+    return _char_response(user, inst_id, char_fields=("skills",))
 
 
 @router.post("/charBuild/addonStory/unlock")
@@ -1318,6 +1424,38 @@ async def char_build_lock_char():
 @router.post("/charBuild/sellChar")
 async def char_build_sell_char():
     return {"result": 0, **empty_delta()}
+
+
+@router.post("/building/sync")
+async def building_sync(request: Request):
+    """Answer the client's periodic building heartbeat with a real timestamp.
+
+    The generic fallback returned only an empty result.  BuildingSyncResponse
+    has a required ``ts`` field and the client retries about once per second
+    when it is missing, flooding the UI thread (and making buttons such as the
+    character-level upgrade button feel unresponsive).
+    """
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    building = user.get("building") or {}
+    modified = {}
+    building_delta = {
+        key: building.get(key)
+        for key in ("rooms", "roomSlots", "status", "chars", "assist")
+        if key in building
+    }
+    if building_delta:
+        modified["building"] = building_delta
+    event = user.get("event") or {}
+    if isinstance(event, dict) and event.get("building") is not None:
+        modified["event"] = {"building": event.get("building")}
+    return {
+        "result": 0,
+        "ts": now_ts(),
+        "playerDataDelta": {"deleted": {}, "modified": modified},
+    }
 
 
 @router.post("/gacha/getPoolDetail")

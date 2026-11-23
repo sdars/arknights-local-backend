@@ -209,12 +209,33 @@ def test_operator_admin_values_and_char_build_are_visible_in_sync(client, login,
         timeout=20,
     ).json()
     assert upgraded["result"] == 0, upgraded
-    level = upgraded["playerDataDelta"]["modified"]["troop"]["chars"]["2"]["level"]
+    modified = upgraded["playerDataDelta"]["modified"]
+    assert set(modified) == {"troop", "inventory", "status"}
+    assert set(modified["troop"]) == {"chars"}
+    assert set(modified["troop"]["chars"]) == {"2"}
+    assert set(modified["troop"]["chars"]["2"]) == {"level", "exp", "favorPoint"}
+    assert set(modified["inventory"]) == {"2004"}
+    assert set(modified["status"]) == {"gold"}
+    level = modified["troop"]["chars"]["2"]["level"]
     assert level > 1
     synced = client.post(
         f"{client.base_url}/account/syncData", headers=login["headers"], json={}, timeout=20
     ).json()
     assert synced["user"]["troop"]["chars"]["2"]["level"] == level
+
+
+def test_building_sync_returns_timestamp_and_building_delta(client, login):
+    response = client.post(
+        f"{client.base_url}/building/sync",
+        headers=login["headers"],
+        json={},
+        timeout=20,
+    ).json()
+    assert response["result"] == 0
+    assert isinstance(response["ts"], int) and response["ts"] > 0
+    building = response["playerDataDelta"]["modified"]["building"]
+    assert set(building) == {"rooms", "roomSlots", "status", "chars", "assist"}
+    assert building["rooms"]
 
 
 def test_shop_purchase_limit_returns_remaining_and_persists(client, login, test_account):
