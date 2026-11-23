@@ -14,7 +14,7 @@ from ..config import APP_DIR, ASSET_CDN, SERVER_NAME, CLIENT_VERSION, RES_VERSIO
 from ..db import connect, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
-from .. import game_data, gift_catalog, grants, mail_service, runtime_settings, selfcheck
+from .. import game_data, gift_catalog, grants, mail_service, payments, runtime_settings, selfcheck
 from .. import protocol_catalog
 from .. import il2cpp_dump
 
@@ -857,6 +857,20 @@ async def gifts_page(request: Request, q: str = ""):
         enriched = dict(row)
         enriched["contents"] = gift_catalog.item_rows(row.get("items") or [])
         rows.append(enriched)
+    cash_rows = []
+    for row in sorted(payments.cash_goods().values(), key=lambda item: int(item.get("price") or 0)):
+        base = int(row.get("diamondNum") or 0)
+        plus = int(row.get("plusNum") or 0)
+        cash_rows.append(
+            {
+                "goodId": row.get("goodId"),
+                "price": int(row.get("price") or 0),
+                "base": base,
+                "plus": plus,
+                "normal": base + plus,
+                "first": int(row.get("doubleCount") or 0),
+            }
+        )
     return templates.TemplateResponse(
         request,
         "gifts.html",
@@ -867,6 +881,7 @@ async def gifts_page(request: Request, q: str = ""):
             "query": q,
             "total": len(gift_catalog.catalog_rows()),
             "current_count": len(gift_catalog.current_goods()),
+            "cash_rows": cash_rows,
         },
     )
 

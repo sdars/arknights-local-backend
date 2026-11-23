@@ -76,6 +76,7 @@ PROTOCOL_ENDPOINTS = [
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#monthly-card", "test": "test_monthly_card_purchase_activates_subscription_and_daily_bonus", "desc": "月卡订阅、每日奖励与幂等"},
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#unconfigured", "test": "test_unconfigured_paid_product_is_not_marked_granted", "desc": "未配置奖励不静默标记已发放"},
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#platform", "test": "test_ios_order_credits_only_ios_originium", "desc": "Android / iOS 源石分平台入账"},
+    {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#cash-648", "test": "test_648_cash_pack_first_purchase_260_then_normal_185", "desc": "648 档首充 260 / 非首充 185"},
     {"stage": "支付", "method": "POST", "path": "/pay/confirmOrder#gift", "test": "test_legacy_gift_package_purchase_grants_catalog_contents", "desc": "历史礼包购买发放内容"},
     {"stage": "任务", "method": "POST", "path": "/mission/confirmMission", "test": "test_confirm_mission_grants_and_persists", "desc": "单任务领奖与持久化"},
     {"stage": "任务", "method": "POST", "path": "/mission/confirmMissionList", "test": "test_confirm_mission_list_and_group_rewards", "desc": "批量任务领奖"},

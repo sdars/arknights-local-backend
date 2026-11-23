@@ -11,6 +11,20 @@
 </header>
 
 <section class="panel">
+  <div class="panel-head"><h2>源石档位</h2><span class="muted">非首充 = 基础 + 赠送；首充只把基础翻倍，赠送不翻倍</span></div>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th>商品 ID</th><th>价格</th><th>基础源石</th><th>赠送</th><th>非首充到账</th><th>首充到账</th></tr></thead>
+      <tbody>
+      {% for row in cash_rows %}
+        <tr><td class="mono">{{ row.goodId }}</td><td>￥{{ row.price }}</td><td>{{ row.base }}</td><td>+{{ row.plus }}</td><td><strong>{{ row.normal }}</strong></td><td><strong>{{ row.first }}</strong></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
   <form class="inline-form" method="get" action="/admin/gifts">
     <label>搜索商品 ID 或名称<input name="q" value="{{ query }}" placeholder="GP_Once_384 / 医疗芯片礼包"></label>
     <button class="primary" type="submit">搜索</button>

@@ -407,6 +407,46 @@ def test_legacy_cash_product_id_uses_current_tier_reward(client, login):
     ]
 
 
+def test_648_cash_pack_first_purchase_260_then_normal_185(client, login, test_account):
+    before = _account_user(test_account["uid"])
+    before_diamond = int(before["status"].get("androidDiamond", 0) or 0)
+    first = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6941, "goodId": "CS_6_r7"},
+        timeout=15,
+    ).json()
+    first_confirm = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": first["orderId"]},
+        timeout=15,
+    ).json()
+    assert first_confirm["result"] == 0
+    assert first_confirm["receiveItems"]["items"] == [
+        {"id": "4002", "type": "DIAMOND", "count": 260}
+    ]
+    assert _account_user(test_account["uid"])["status"]["androidDiamond"] == before_diamond + 260
+
+    second = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6941, "goodId": "CS_6_r7"},
+        timeout=15,
+    ).json()
+    second_confirm = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": second["orderId"]},
+        timeout=15,
+    ).json()
+    assert second_confirm["result"] == 0
+    assert second_confirm["receiveItems"]["items"] == [
+        {"id": "4002", "type": "DIAMOND", "count": 185}
+    ]
+    assert _account_user(test_account["uid"])["status"]["androidDiamond"] == before_diamond + 445
+
+
 def test_unconfigured_paid_product_is_not_marked_granted(client, login):
     created = client.post(
         f"{client.base_url}/pay/createOrder",
