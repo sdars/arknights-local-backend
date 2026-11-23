@@ -137,8 +137,16 @@ def pool_meta(pool_id):
         return {}
     row.setdefault("gachaPoolName", str(pool_id))
     row.setdefault("enabled", True)
-    row.setdefault("singlePrice", 600)
-    row.setdefault("tenPrice", _int(row.get("singlePrice"), 600) * 10)
+    # The beginner pool stores its discounted per-pull price in gachaPrice
+    # (380), while standard pools use 600.  Admin overrides write singlePrice
+    # and must take precedence over the static value.
+    price = _int(row.get("singlePrice"), 0)
+    if price <= 0:
+        price = _int(row.get("gachaPrice"), 0)
+    if price <= 0:
+        price = 600
+    row["singlePrice"] = price
+    row.setdefault("tenPrice", price * 10)
     row.setdefault("upRate", 0.5)
     row.setdefault("guarantee5", bool(_int(row.get("guarantee5Avail"), 0)))
     row.setdefault("guarantee5Count", _int(row.get("guarantee5Count"), 10))
@@ -286,15 +294,20 @@ def delete_pool(pool_id):
 
 def _ensure_gacha(user):
     gacha = user.setdefault("gacha", {})
-    for key in ("normal", "limit", "single", "special", "fesClassic", "attain"):
+    for key in ("normal", "limit", "single", "special", "fesClassic", "attain", "linkage", "double", "backflow"):
         if not isinstance(gacha.get(key), dict):
             gacha[key] = {}
     if not isinstance(gacha.get("newbee"), dict):
-        gacha["newbee"] = {"cnt": 20, "poolId": "BOOT_0_1_3", "openFlag": 1}
+        gacha["newbee"] = {"cnt": 21, "poolId": "BOOT_0_1_3", "openFlag": 1}
     ex = user.setdefault("exgachadata", {})
     if not isinstance(ex, dict):
         user["exgachadata"] = ex = {}
     return gacha
+
+
+def ensure_gacha_state(user):
+    """Give the client every PlayerGacha dictionary it deserializes."""
+    _ensure_gacha(user)
 
 
 def _pity_key(pool_id):
@@ -457,7 +470,7 @@ def _pool_state(user, pool_id, count):
     family = "limit" if pool_id.startswith("LIMITED") else ("newbee" if pool_id.startswith("BOOT") else "normal")
     if family == "newbee":
         node = gacha["newbee"]
-        node["cnt"] = max(0, _int(node.get("cnt"), 20) - count)
+        node["cnt"] = max(0, _int(node.get("cnt"), 21) - count)
         node.setdefault("poolId", pool_id)
         node["openFlag"] = 1
     else:
@@ -479,6 +492,11 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", now=None):
     meta = pool_meta(pool_id)
     if not meta or not meta.get("enabled", True):
         return _error(5771, "卡池不存在或已关闭")
+    if str(pool_id or "").startswith("BOOT"):
+        gacha = _ensure_gacha(user)
+        remaining = _int(gacha["newbee"].get("cnt"), 21)
+        if remaining < count:
+            return _error(400, "新手池抽卡数不足")
     detail = pool_detail(pool_id)
     if not detail:
         return _error(5771, "卡池详情不可用")

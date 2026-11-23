@@ -98,6 +98,7 @@ async def sync_data(request: Request):
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
     battles.reconcile_tutorial_state(user)
+    gacha_service.ensure_gacha_state(user)
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
@@ -125,6 +126,7 @@ async def sync_status(request: Request):
         body = {}
     user = player_data(account)
     battles.reconcile_tutorial_state(user)
+    gacha_service.ensure_gacha_state(user)
     ts = now_ts()
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
@@ -184,6 +186,7 @@ async def sync_push_message(request: Request):
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
     battles.reconcile_tutorial_state(user)
+    gacha_service.ensure_gacha_state(user)
     ts = now_ts()
     status = user.setdefault("status", {})
     status["lastOnlineTs"] = ts
@@ -367,6 +370,48 @@ async def user_checkin(request: Request):
         "signInRewards": granted,
         "subscriptionRewards": monthly_granted,
         "playerDataDelta": delta,
+    }
+
+
+@router.post("/user/exchangeDiamondShard")
+async def exchange_diamond_shard(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    count = _as_int(body.get("count"), 0)
+    if count <= 0:
+        return {"result": 1, "errMsg": "兑换数量无效"}
+    user = player_data(account)
+    status = user.setdefault("status", {})
+    diamond_key = grants.diamond_status_key(user, account.get("platform"))
+    owned = _as_int(status.get(diamond_key), 0)
+    if owned < count:
+        return {"result": 1, "errMsg": "剩余源石无法兑换合成玉"}
+    rate = _as_int((game_data.excel("gamedata_const.json") or {}).get("diamondToShdRate"), 180)
+    status[diamond_key] = owned - count
+    status["diamondShard"] = _as_int(status.get("diamondShard"), 0) + count * rate
+    save_player(account, user)
+    logger.info(
+        "exchangeDiamondShard uid=%s platform=%s count=%s rate=%s %s=%s shard=%s",
+        account["uid"], diamond_key, count, rate,
+        diamond_key, status[diamond_key], status["diamondShard"],
+    )
+    return {
+        "result": 0,
+        "playerDataDelta": {
+            "deleted": {},
+            "modified": {
+                "status": {
+                    "androidDiamond": _as_int(status.get("androidDiamond"), 0),
+                    "iosDiamond": _as_int(status.get("iosDiamond"), 0),
+                    "diamondShard": status["diamondShard"],
+                }
+            },
+        },
     }
 
 
@@ -1281,6 +1326,7 @@ async def gacha_pool_detail(request: Request):
         body = await request.json()
     except Exception:
         body = {}
+    logger.info("gacha pool detail poolId=%r", body.get("poolId"))
     detail = gacha_service.pool_detail(body.get("poolId"))
     if not detail:
         return {"result": 1, "error": "pool not found"}
@@ -1307,6 +1353,10 @@ async def gacha_advanced(request: Request):
         use_tkt=body.get("useTkt"),
         item_id=body.get("itemId") or "",
     )
+    logger.info(
+        "gacha single uid=%s body=%s result=%s error=%r",
+        account["uid"], body, result.get("result"), result.get("error"),
+    )
     return _gacha_response(account, user, result)
 
 
@@ -1331,6 +1381,10 @@ async def gacha_ten_advanced(request: Request):
         use_tkt=body.get("useTkt"),
         item_id=item_id,
     )
+    logger.info(
+        "gacha ten uid=%s body=%s itemId=%r result=%s error=%r",
+        account["uid"], body, item_id, result.get("result"), result.get("error"),
+    )
     return _gacha_response(account, user, result)
 
 
@@ -1340,6 +1394,7 @@ async def gacha_sync_normal(request: Request):
     if not account:
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
+    gacha_service.ensure_gacha_state(user)
     recruit = gacha_service.public_recruit_state(user)
     save_player(account, user)
     return {
