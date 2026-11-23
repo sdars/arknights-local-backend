@@ -111,6 +111,16 @@
     picker.querySelectorAll(".remove-resource").forEach((button) => {
       button.addEventListener("click", () => button.closest(".resource-row").remove());
     });
+    const form = picker.closest("form");
+    if (form) {
+      form.addEventListener("submit", (event) => {
+        if (input.value.trim() && !picker.querySelector(".resource-row")) {
+          event.preventDefault();
+          input.focus();
+          alert("请先点击搜索结果添加资源，或清空搜索框。");
+        }
+      });
+    }
   }
 
   document.querySelectorAll(".resource-picker").forEach(init);
