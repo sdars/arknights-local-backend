@@ -171,6 +171,31 @@ def test_single_ticket_item_id_is_consumed():
     assert user["status"]["gachaTicket"] == 0
 
 
+def test_ten_pull_closes_the_one_time_five_star_guarantee_counter():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 12000
+    user["gacha"]["normal"] = {
+        "NORM_79_0_4": {"rarity": 4, "maxCnt": 10, "avail": True, "cnt": 0}
+    }
+    result = gacha_service.draw(user, "NORM_79_0_4", count=10, use_tkt=0)
+    assert result["result"] == 0, result
+    node = user["gacha"]["normal"]["NORM_79_0_4"]
+    assert node["avail"] is False
+    assert node["cnt"] == 0
+    assert node["maxCnt"] == 10
+
+
+def test_gacha_state_repairs_negative_guarantee_counter():
+    user = copy.deepcopy(_template())
+    user["gacha"]["normal"] = {
+        "NORM_79_0_3": {"rarity": 4, "maxCnt": 10, "avail": True, "cnt": 20}
+    }
+    gacha_service.ensure_gacha_state(user)
+    node = user["gacha"]["normal"]["NORM_79_0_3"]
+    assert node["cnt"] == 0
+    assert node["avail"] is False
+
+
 def test_exchange_diamond_shard_uses_account_platform(client, login, test_account):
     _admin_login(client)
     uid = int(test_account["uid"])

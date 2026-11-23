@@ -310,7 +310,29 @@ def _ensure_gacha(user):
 
 def ensure_gacha_state(user):
     """Give the client every PlayerGacha dictionary it deserializes."""
-    _ensure_gacha(user)
+    gacha = _ensure_gacha(user)
+    # Repair the old cumulative counter bug.  The client renders this field as
+    # ``maxCnt - cnt`` ("N pulls until a 5-star"); values >= maxCnt therefore
+    # overflow into negative UI such as "-10次内".
+    for family in ("normal", "limit"):
+        bucket = gacha.get(family)
+        if not isinstance(bucket, dict):
+            continue
+        for pool_id, node in bucket.items():
+            if not isinstance(node, dict):
+                continue
+            meta = pool_meta(pool_id)
+            max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
+            available = bool(_int(meta.get("guarantee5Avail"), 0)) and bool(node.get("avail", True))
+            cnt = max(0, _int(node.get("cnt"), 0))
+            if not available or cnt >= max_cnt:
+                # A completed guarantee cycle must not be carried into the
+                # next banner cycle as a larger counter.
+                available = False
+                cnt = 0
+            node["maxCnt"] = max_cnt
+            node["avail"] = available
+            node["cnt"] = cnt
 
 
 def _pity_key(pool_id):
@@ -636,7 +658,7 @@ def _grant_character(user, char_id, rarity, now):
     return new_inst, True, item_get
 
 
-def _pool_state(user, pool_id, count):
+def _pool_state(user, pool_id, count, results=None):
     gacha = _ensure_gacha(user)
     pool_id = str(pool_id or "")
     family = "limit" if pool_id.startswith("LIMITED") else ("newbee" if pool_id.startswith("BOOT") else "normal")
@@ -651,10 +673,26 @@ def _pool_state(user, pool_id, count):
         if not isinstance(node, dict):
             node = {"rarity": 4, "maxCnt": 10, "avail": True, "cnt": 0}
             bucket[pool_id] = node
-        node["cnt"] = _int(node.get("cnt"), 0) + count
+        meta = pool_meta(pool_id)
+        max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
+        available = bool(_int(meta.get("guarantee5Avail"), 0)) and bool(node.get("avail", True))
+        cnt = max(0, min(_int(node.get("cnt"), 0), max_cnt - 1)) if available else 0
+        if available and results:
+            for row in results:
+                if _int(row.get("rarity"), 0) >= 4:
+                    # Any 5/6-star consumes the one-time "within ten"
+                    # guarantee and resets the client counter.
+                    available = False
+                    cnt = 0
+                    break
+                cnt += 1
+            if cnt >= max_cnt:
+                available = False
+                cnt = 0
+        node["cnt"] = cnt
+        node["avail"] = available
+        node["maxCnt"] = max_cnt
         node.setdefault("rarity", 4)
-        node.setdefault("maxCnt", 10)
-        node["avail"] = True
     return gacha
 
 
@@ -725,7 +763,7 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None
             }
         )
     ex[pity_key] = pity
-    gacha = _pool_state(user, pool_id, count)
+    gacha = _pool_state(user, pool_id, count, results=results)
     attain = gacha.setdefault("attain", {})
     for row in results:
         char_id = str(row["charId"])
