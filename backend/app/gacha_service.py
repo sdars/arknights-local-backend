@@ -376,16 +376,29 @@ def ensure_gacha_state(user):
     double_bucket = gacha.setdefault("double", {})
     normal_bucket = gacha.get("normal")
     if isinstance(normal_bucket, dict):
-        for pool_id in list(normal_bucket):
+        for pool_id, old in list(normal_bucket.items()):
             if _pool_rule(pool_id) not in ("DOUBLE", "CLASSIC_DOUBLE"):
                 continue
-            old = normal_bucket.pop(pool_id, None)
-            if isinstance(old, dict) and pool_id not in double_bucket:
+            if not isinstance(old, dict):
+                normal_bucket.pop(pool_id, None)
+                continue
+            # Older builds stored the DOUBLE show counter in the ``normal``
+            # bucket and deleted it on every sync.  Keep the public guarantee
+            # node the client needs for "N pulls until a 5-star", and move
+            # the cumulative counter to the real ``double`` bucket.
+            legacy_show = max(0, _int(old.get("showCnt"), _int(old.get("cnt"), 0)))
+            if pool_id not in double_bucket:
                 double_bucket[pool_id] = {
-                    "showCnt": max(0, _int(old.get("showCnt"), _int(old.get("cnt"), 0))),
+                    "showCnt": legacy_show,
                     "hitCharState": 0,
                     "hitCharId": "",
                 }
+            if "avail" not in old:
+                max_cnt = max(1, _int(pool_meta(pool_id).get("guarantee5Count"), 10))
+                old["maxCnt"] = max_cnt
+                old["avail"] = legacy_show < max_cnt
+                old["cnt"] = legacy_show if legacy_show < max_cnt else 0
+                old.setdefault("rarity", 4)
     for pool_id, node in list(double_bucket.items()):
         if not isinstance(node, dict):
             double_bucket[pool_id] = {"showCnt": 0, "hitCharState": 0, "hitCharId": ""}
@@ -431,6 +444,30 @@ def ensure_gacha_state(user):
             node["leastFree"] = max(0, _int(node.get("leastFree"), 0))
             node["poolCnt"] = max(0, _int(node.get("poolCnt"), 0))
             node["recruitedFreeChar"] = bool(node.get("recruitedFreeChar", False))
+    # Accounts created before the guarantee node was written for DOUBLE or
+    # LIMITED banners only have the rule-specific counter.  Once that counter
+    # reaches the one-time guarantee length, publish the consumed node so the
+    # client stops falling back to the static "10 pulls" text.
+    if isinstance(normal_bucket, dict):
+        for family, counter_key in (("double", "showCnt"), ("limit", "poolCnt")):
+            bucket = gacha.get(family)
+            if not isinstance(bucket, dict):
+                continue
+            for pool_id, node in bucket.items():
+                if pool_id in normal_bucket or not isinstance(node, dict):
+                    continue
+                meta = pool_meta(pool_id)
+                if not _int(meta.get("guarantee5Avail"), 0):
+                    continue
+                max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
+                total = max(0, _int(node.get(counter_key), 0))
+                if total >= max_cnt:
+                    normal_bucket[pool_id] = {
+                        "rarity": 4,
+                        "maxCnt": max_cnt,
+                        "avail": False,
+                        "cnt": 0,
+                    }
     for family in ("fesClassic", "special", "backflow"):
         bucket = gacha.get(family)
         if not isinstance(bucket, dict):
@@ -443,7 +480,7 @@ def ensure_gacha_state(user):
     # Repair the old cumulative counter bug.  The client renders this field as
     # ``maxCnt - cnt`` ("N pulls until a 5-star"); values >= maxCnt therefore
     # overflow into negative UI such as "-10次内".
-    for family in ("normal", "limit"):
+    for family in ("normal",):
         bucket = gacha.get(family)
         if not isinstance(bucket, dict):
             continue
@@ -787,6 +824,93 @@ def _grant_character(user, char_id, rarity, now):
     return new_inst, True, item_get
 
 
+def _guarantee_bucket(gacha, rule):
+    # SINGLE pools expose their own counter class; every other pool type uses
+    # PlayerGacha.PlayerGachaPool in ``gacha.normal`` for the one-time
+    # "within N pulls" 5-star guarantee.
+    return gacha.setdefault("single" if rule == "SINGLE" else "normal", {})
+
+
+def _guarantee_node(user, pool_id, meta, create=False):
+    gacha = _ensure_gacha(user)
+    rule = str(meta.get("gachaRuleType") or "")
+    if rule == "BOOT" or str(pool_id or "").startswith("BOOT"):
+        return None, 0, False, 0
+    if not _int(meta.get("guarantee5Avail"), 0):
+        return None, 0, False, 0
+    bucket = _guarantee_bucket(gacha, rule)
+    node = bucket.get(str(pool_id))
+    if not isinstance(node, dict):
+        if not create:
+            return None, max(1, _int(meta.get("guarantee5Count"), 10)), False, 0
+        node = {
+            "rarity": 4,
+            "maxCnt": max(1, _int(meta.get("guarantee5Count"), 10)),
+            "avail": True,
+            "cnt": 0,
+        }
+        if rule == "SINGLE":
+            node.update(
+                {
+                    "singleEnsureCnt": 0,
+                    "singleEnsureUse": False,
+                    "singleEnsureChar": "",
+                }
+            )
+        bucket[str(pool_id)] = node
+    max_cnt = max(1, _int(node.get("maxCnt"), _int(meta.get("guarantee5Count"), 10)))
+    available = bool(node.get("avail", True))
+    cnt = max(0, _int(node.get("cnt"), 0))
+    return node, max_cnt, available, cnt
+
+
+def _guarantee_force_index(user, pool_id, meta, count):
+    """Return the pull index that must be a 5-star, or -1.
+
+    The guarantee is shared by single and ten-pull requests: the N-th pull
+    since the banner started must be a 5-star even when the player buys ten
+    singles one at a time.
+    """
+    node, max_cnt, available, cnt = _guarantee_node(user, pool_id, meta)
+    if not _int(meta.get("guarantee5Avail"), 0):
+        return -1
+    if node is None:
+        max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
+        return count - 1 if count >= max_cnt else -1
+    if not available:
+        return -1
+    threshold = max_cnt - cnt
+    if 1 <= threshold <= count:
+        return threshold - 1
+    return -1
+
+
+def _update_guarantee(user, pool_id, meta, count, results=None):
+    node, max_cnt, available, cnt = _guarantee_node(user, pool_id, meta, create=True)
+    if node is None:
+        return None
+    if available:
+        if results:
+            for row in results:
+                if _int(row.get("rarity"), 0) >= 4:
+                    available = False
+                    cnt = 0
+                    break
+                cnt += 1
+        elif count:
+            cnt += count
+        if cnt >= max_cnt:
+            available = False
+            cnt = 0
+    else:
+        cnt = 0
+    node["cnt"] = cnt
+    node["avail"] = available
+    node["maxCnt"] = max_cnt
+    node.setdefault("rarity", 4)
+    return node
+
+
 def _pool_state(user, pool_id, count, results=None):
     gacha = _ensure_gacha(user)
     pool_id = str(pool_id or "")
@@ -798,6 +922,7 @@ def _pool_state(user, pool_id, count, results=None):
         node.setdefault("poolId", pool_id)
         node["openFlag"] = 1
         return gacha
+    guarantee_node = _update_guarantee(user, pool_id, meta, count, results)
     if rule in ("DOUBLE", "CLASSIC_DOUBLE"):
         bucket = gacha.setdefault("double", {})
         node = bucket.get(pool_id)
@@ -820,39 +945,13 @@ def _pool_state(user, pool_id, count, results=None):
         node["recruitedFreeChar"] = bool(node.get("recruitedFreeChar", False))
         return gacha
     if rule == "SINGLE":
-        bucket = gacha.setdefault("single", {})
-        node = bucket.get(pool_id)
-        if not isinstance(node, dict):
-            node = {
-                "cnt": 0,
-                "maxCnt": 10,
-                "avail": True,
-                "singleEnsureCnt": 0,
-                "singleEnsureUse": False,
-                "singleEnsureChar": "",
-            }
-            bucket[pool_id] = node
-        max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
-        available = bool(_int(meta.get("guarantee5Avail"), 0)) and bool(node.get("avail", True))
-        cnt = max(0, min(_int(node.get("cnt"), 0), max_cnt - 1)) if available else 0
-        if available and results:
-            for row in results:
-                if _int(row.get("rarity"), 0) >= 4:
-                    available = False
-                    cnt = 0
-                    break
-                cnt += 1
-            if cnt >= max_cnt:
-                available = False
-                cnt = 0
-        node.update(
+        if guarantee_node is None:
+            return gacha
+        guarantee_node.update(
             {
-                "cnt": cnt,
-                "avail": available,
-                "maxCnt": max_cnt,
-                "singleEnsureCnt": max(0, _int(node.get("singleEnsureCnt"), 0)),
-                "singleEnsureUse": bool(node.get("singleEnsureUse", False)),
-                "singleEnsureChar": str(node.get("singleEnsureChar") or ""),
+                "singleEnsureCnt": max(0, _int(guarantee_node.get("singleEnsureCnt"), 0)),
+                "singleEnsureUse": bool(guarantee_node.get("singleEnsureUse", False)),
+                "singleEnsureChar": str(guarantee_node.get("singleEnsureChar") or ""),
             }
         )
         return gacha
@@ -897,31 +996,8 @@ def _pool_state(user, pool_id, count, results=None):
         if not isinstance(bucket.get(pool_id), dict):
             bucket[pool_id] = {}
         return gacha
-    # NORMAL / CLASSIC / GACHAWITHSPECIFIED6 share the ordinary pool state.
-    bucket = gacha.setdefault("normal", {})
-    node = bucket.get(pool_id)
-    if not isinstance(node, dict):
-        node = {"rarity": 4, "maxCnt": 10, "avail": True, "cnt": 0}
-        bucket[pool_id] = node
-    max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
-    available = bool(_int(meta.get("guarantee5Avail"), 0)) and bool(node.get("avail", True))
-    cnt = max(0, min(_int(node.get("cnt"), 0), max_cnt - 1)) if available else 0
-    if available and results:
-        for row in results:
-            if _int(row.get("rarity"), 0) >= 4:
-                # Any 5/6-star consumes the one-time "within ten"
-                # guarantee and resets the client counter.
-                available = False
-                cnt = 0
-                break
-            cnt += 1
-        if cnt >= max_cnt:
-            available = False
-            cnt = 0
-    node["cnt"] = cnt
-    node["avail"] = available
-    node["maxCnt"] = max_cnt
-    node.setdefault("rarity", 4)
+    # NORMAL / CLASSIC / GACHAWITHSPECIFIED6 share the ordinary pool state,
+    # which was already written by ``_update_guarantee`` above.
     return gacha
 
 
@@ -974,16 +1050,13 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None
     rates, _ = _rarity_rates(detail, pity)
     results = []
     hit_high = False
-    # A ten-pull guarantees at least one 5-star.  A single pull must not be
-    # promoted: the old formula made every single pull on a pool with
-    # ``guarantee5Avail`` return a 5-star.
-    guarantee_at = -1
-    if count >= 10 and _int(meta.get("guarantee5Avail"), 0):
-        guarantee_at = min(count - 1, max(0, _int(meta.get("guarantee5Count"), 10) - 1))
+    # The client shows ``maxCnt - cnt``.  Enforce the same N-th-pull rule for
+    # both ten-pulls and ten singles instead of promoting every single pull.
+    guarantee_at = _guarantee_force_index(user, pool_id, meta, count)
     detail_has_rate_up = bool(detail.get("hasRateUp", True))
     for index in range(count):
         rarity = _pick_rarity(rates)
-        if index == guarantee_at and not hit_high and _int(meta.get("guarantee5Avail"), 0):
+        if index == guarantee_at and not hit_high and rarity < 4:
             rarity = 4
         if rarity >= 4:
             hit_high = True

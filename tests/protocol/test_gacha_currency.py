@@ -196,6 +196,41 @@ def test_gacha_state_repairs_negative_guarantee_counter():
     assert node["avail"] is False
 
 
+def test_gacha_state_publishes_consumed_double_guarantee_for_legacy_accounts():
+    user = copy.deepcopy(_template())
+    user["gacha"]["normal"] = {}
+    user["gacha"]["double"] = {
+        "DOUBLE_79_0_5": {"showCnt": 10, "hitCharState": 0, "hitCharId": ""}
+    }
+    gacha_service.ensure_gacha_state(user)
+    node = user["gacha"]["normal"]["DOUBLE_79_0_5"]
+    assert node["avail"] is False
+    assert node["cnt"] == 0
+    # The cumulative DOUBLE counter must survive the repair.
+    assert user["gacha"]["double"]["DOUBLE_79_0_5"]["showCnt"] == 10
+
+
+def test_single_pulls_decrement_the_visible_guarantee_counter():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 6000
+    seen = []
+    for _ in range(3):
+        result = gacha_service.draw(user, "DOUBLE_79_0_5", count=1, use_tkt=0)
+        assert result["result"] == 0, result
+        node = user["gacha"]["normal"]["DOUBLE_79_0_5"]
+        if node["avail"]:
+            seen.append(node["maxCnt"] - node["cnt"])
+        else:
+            seen.append(None)
+    # Either an early 5-star consumed the guarantee, or the counter counts
+    # down 9, 8, 7 instead of staying at the static maximum of 10.
+    assert seen[0] in (9, None)
+    if seen[0] == 9:
+        assert seen[1] in (8, None)
+        if seen[1] == 8:
+            assert seen[2] in (7, None)
+
+
 def test_new_double_pool_is_loaded_and_has_client_detail():
     meta = gacha_service.pool_meta("DOUBLE_79_0_5")
     assert meta["gachaRuleType"] == "DOUBLE"
@@ -222,7 +257,10 @@ def test_double_pool_ten_pull_uses_combined_ory_and_writes_double_state():
     node = user["gacha"]["double"]["DOUBLE_79_0_5"]
     assert node["showCnt"] == 10
     assert node["hitCharState"] == 0
-    assert "DOUBLE_79_0_5" not in user["gacha"]["normal"]
+    guarantee = user["gacha"]["normal"]["DOUBLE_79_0_5"]
+    assert guarantee["avail"] is False
+    assert guarantee["cnt"] == 0
+    assert guarantee["maxCnt"] == 10
 
 
 def test_choose_pool_up_records_both_double_selections():
@@ -238,7 +276,7 @@ def test_choose_pool_up_records_both_double_selections():
     assert node["hitCharId"] == "char_4027_heyak"
 
 
-def test_single_pull_does_not_use_the_ten_pull_five_star_guarantee():
+def test_ten_singles_force_the_final_pull_to_five_star():
     pool_id = "TEST_SINGLE_GUARANTEE"
     gacha_service.save_pool(
         pool_id,
@@ -256,10 +294,52 @@ def test_single_pull_does_not_use_the_ten_pull_five_star_guarantee():
     )
     try:
         user = copy.deepcopy(_template())
-        user["status"]["diamondShard"] = 600
-        result = gacha_service.draw(user, pool_id, count=1, use_tkt=0)
+        user["status"]["diamondShard"] = 6000
+        rarities = []
+        for _ in range(10):
+            result = gacha_service.draw(user, pool_id, count=1, use_tkt=0)
+            assert result["result"] == 0, result
+            rarities.append(result["charGet"]["rarity"])
+        assert rarities[:9] == [2] * 9
+        assert rarities[9] == 4
+        node = user["gacha"]["normal"][pool_id]
+        assert node["avail"] is False
+        assert node["cnt"] == 0
+    finally:
+        gacha_service.delete_pool(pool_id)
+
+
+def test_ten_pull_honours_partial_single_pull_progress():
+    pool_id = "TEST_PARTIAL_GUARANTEE"
+    gacha_service.save_pool(
+        pool_id,
+        {
+            "gachaPoolName": "保底进度测试",
+            "rate6": 0,
+            "rate5": 0,
+            "rate4": 0,
+            "rate3": 1,
+            "guarantee5Avail": 1,
+            "guarantee5Count": 10,
+            "singlePrice": 600,
+        },
+        create=True,
+    )
+    try:
+        user = copy.deepcopy(_template())
+        user["status"]["diamondShard"] = 6000
+        user["gacha"]["normal"][pool_id] = {
+            "rarity": 4,
+            "maxCnt": 10,
+            "avail": True,
+            "cnt": 3,
+        }
+        result = gacha_service.draw(user, pool_id, count=10, use_tkt=0)
         assert result["result"] == 0, result
-        assert result["charGet"]["rarity"] == 2
+        assert [row["rarity"] for row in result["gachaResultList"][:6]] == [2] * 6
+        assert result["gachaResultList"][6]["rarity"] == 4
+        node = user["gacha"]["normal"][pool_id]
+        assert node["avail"] is False
     finally:
         gacha_service.delete_pool(pool_id)
 
@@ -269,7 +349,7 @@ def test_gacha_state_uses_rule_specific_client_buckets():
     gacha_service._pool_state(user, "LIMITED_79_0_1", 10, results=[])
     assert "LIMITED_79_0_1" in user["gacha"]["limit"]
     assert user["gacha"]["limit"]["LIMITED_79_0_1"]["poolCnt"] == 10
-    assert "LIMITED_79_0_1" not in user["gacha"]["normal"]
+    assert user["gacha"]["normal"]["LIMITED_79_0_1"]["avail"] is False
 
     gacha_service._pool_state(user, "SINGLE_78_0_1", 1, results=[])
     assert "SINGLE_78_0_1" in user["gacha"]["single"]
@@ -277,7 +357,8 @@ def test_gacha_state_uses_rule_specific_client_buckets():
 
     gacha_service._pool_state(user, "FESCLASSIC_79_0_1", 1, results=[])
     assert "FESCLASSIC_79_0_1" in user["gacha"]["fesClassic"]
-    assert "FESCLASSIC_79_0_1" not in user["gacha"]["normal"]
+    assert user["gacha"]["normal"]["FESCLASSIC_79_0_1"]["cnt"] == 1
+    assert user["gacha"]["normal"]["FESCLASSIC_79_0_1"]["avail"] is True
 
 
 def test_gacha_state_migrates_legacy_attain_character_counters():
