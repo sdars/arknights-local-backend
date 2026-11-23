@@ -17,6 +17,10 @@
 {% if message %}<div class="alert">{{ message }}</div>{% endif %}
 {% if not pool.client_visible %}
 <div class="alert">该卡池 ID 不在客户端静态 gacha_table 中，游戏内不会显示。要上线到游戏，请编辑一个已有池位（可选用已关闭的旧池），或更新客户端 gacha_table 资源。</div>
+{% elif not pool.client_open %}
+<div class="alert">客户端静态 gacha_table 中该池位已过期（{{ pool.client_start_text or '未设置' }} ~ {{ pool.client_end_text or '未设置' }}）。修改服务端开放/结束时间不会改变游戏内状态；请选择当前静态开放的池位，或更新客户端 gacha_table 资源。</div>
+{% else %}
+<p class="muted small-note">客户端静态窗口：{{ pool.client_start_text or '未设置' }} ~ {{ pool.client_end_text or '未设置' }}（当前开放）</p>
 {% endif %}
 
 <section class="panel">

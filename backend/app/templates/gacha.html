@@ -44,7 +44,7 @@
   </form>
   <div class="table-wrap">
     <table class="table compact-table">
-      <thead><tr><th>卡池</th><th>开放时间</th><th>结束时间</th><th>单抽</th><th>状态</th><th>客户端</th><th>操作</th></tr></thead>
+      <thead><tr><th>卡池</th><th>开放时间</th><th>结束时间</th><th>单抽</th><th>服务端状态</th><th>客户端状态</th><th>操作</th></tr></thead>
       <tbody>
       {% for row in pools %}
         <tr>
@@ -53,7 +53,7 @@
           <td class="mono small-note">{{ row.end_text or '未设置' }}</td>
           <td>{{ row.get('singlePrice', 600) }}</td>
           <td>{% if row.is_active %}<span class="status s2">开放中</span>{% else %}<span class="status s3">未开放</span>{% endif %}</td>
-          <td>{% if row.client_visible %}<span class="status s2">可见</span>{% else %}<span class="status s3">仅服务端</span>{% endif %}</td>
+          <td>{% if not row.client_visible %}<span class="status s3">仅服务端</span>{% elif row.client_open %}<span class="status s2">可见 / 开放</span>{% else %}<span class="status s4">可见 / 已过期</span>{% endif %}</td>
           <td><a class="btn" href="/admin/gacha/{{ row.pool_id }}">编辑</a></td>
         </tr>
       {% else %}<tr><td colspan="7" class="muted">没有卡池。</td></tr>{% endfor %}

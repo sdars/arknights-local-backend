@@ -1,5 +1,13 @@
 import os
 import random
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "backend"))
+
+from app.routers import admin as admin_router  # noqa: E402
 
 
 def _admin_login(client):
@@ -60,11 +68,22 @@ def _detail(client, pool_id):
     return response.json()
 
 
+def test_admin_gacha_list_puts_client_open_pools_first():
+    rows = admin_router._gacha_rows()
+    assert rows
+    assert rows[0]["is_active"] is True
+    assert rows[0]["client_visible"] is True
+    assert rows[0]["client_open"] is True
+    assert any(not row["client_open"] for row in rows)
+
+
 def test_create_custom_pool_and_set_prize_characters_and_rates(client, login, test_account):
     _admin_login(client)
     pool_id = f"NORM_EDIT_{random.SystemRandom().randrange(100000, 999999)}"
     try:
         _create_pool(client, pool_id, "自定义奖池测试")
+        rows = admin_router._gacha_rows(q=pool_id)
+        assert rows and rows[0]["client_visible"] is False
         saved = client.post(
             f"{client.base_url}/admin/gacha/{pool_id}/pool",
             data=_pool_form(),
