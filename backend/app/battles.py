@@ -359,6 +359,50 @@ def sync_mainline_progress(user, target):
         marked += 1
     status = user.setdefault("status", {})
     status["mainStageProgress"] = stage_id
+    completed = set(wanted) | set(training)
+    stories = game_data.excel("story_table.json") or {}
+    target_progress = 0
+    for story in stories.values():
+        if not isinstance(story, dict):
+            continue
+        condition = story.get("condition") or {}
+        required = condition.get("requiredStages") or []
+        if not any(str(entry.get("stageId") or "") == stage_id for entry in required if isinstance(entry, dict)):
+            continue
+        target_progress = max(target_progress, int(story.get("setProgress") or 0), int(condition.get("minProgress") or 0))
+    if target_progress:
+        status["progress"] = max(int(status.get("progress") or 0), target_progress)
+    flags = status.setdefault("flags", {})
+    if not isinstance(flags, dict):
+        flags = {}
+        status["flags"] = flags
+    flags["init"] = 1
+    # Advance the linear tutorial state machine together with the mainline.
+    # Otherwise the client keeps trying to run an earlier tutorial on a stage
+    # that is already marked complete and can abort with a NullReferenceException.
+    tutorial_prefixes = (
+        "obt/guide/beg/",
+        "obt/guide/l0-",
+        "obt/guide/l1-",
+        "obt/guide/l2-",
+        "obt/guide/stage/stagepage_v2_intro",
+        "obt/guide/misc/assist_char",
+        "obt/guide/misc/auto_battle",
+        "obt/guide/train/",
+    )
+    current_progress = int(status.get("progress") or 0)
+    for story_id, story in stories.items():
+        story_id = str(story_id or "")
+        if not story_id.startswith(tutorial_prefixes) or not isinstance(story, dict):
+            continue
+        condition = story.get("condition") or {}
+        min_progress = int(condition.get("minProgress") or 0)
+        if min_progress > current_progress:
+            continue
+        required = condition.get("requiredStages") or []
+        if required and not all(str(entry.get("stageId") or "") in completed for entry in required if isinstance(entry, dict)):
+            continue
+        flags[story_id] = 1
     next_stage = sequence[end] if end < len(sequence) else ""
     if next_stage:
         _stage_node(stages, next_stage)

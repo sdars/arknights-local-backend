@@ -294,4 +294,7 @@ def test_admin_mainline_sync_marks_early_stages_passed(client, login, test_accou
     assert synced["dungeon"]["stages"]["main_00-01"]["state"] == 3
     assert synced["dungeon"]["stages"]["main_00-01"]["completeTimes"] >= 1
     assert synced["dungeon"]["stages"]["main_00-10"]["state"] == 3
+    assert synced["status"]["progress"] >= 1100
+    assert synced["status"]["flags"]["obt/guide/l0-1/0_mission_main"] == 1
+    assert synced["status"]["flags"]["obt/guide/l0-1/1_training_level"] == 1
 
