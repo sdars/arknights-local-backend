@@ -235,6 +235,11 @@
         </label>
         <div class="actions"><button class="primary" type="submit">保存干员</button></div>
       </form>
+      <form class="operator-form" method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}">
+        <input type="hidden" name="action" value="levelup">
+        {{ number_field('target_level', '目标等级（经验卡升级）', row.maxLevel, 1) }}
+        <div class="actions"><button class="primary" type="submit">按经验卡升到目标等级</button></div>
+      </form>
     </article>
   {% else %}
     <p class="muted">暂无干员。</p>

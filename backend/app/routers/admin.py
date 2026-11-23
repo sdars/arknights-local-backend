@@ -929,6 +929,9 @@ def _account_page_context(account):
             continue
         char_id = char.get("charId") or ""
         meta = char_catalog.get(char_id) or {}
+        phases = meta.get("phases") or []
+        phase = min(max(0, _int(char.get("evolvePhase"), 0)), max(0, len(phases) - 1))
+        max_level = max(1, _int((phases[phase] or {}).get("maxLevel"), 1)) if phases else 90
         character_rows.append(
             {
                 "instId": str(inst_id),
@@ -936,6 +939,7 @@ def _account_page_context(account):
                 "name": meta.get("name") or char_id,
                 "rarity": meta.get("rarity") or "",
                 "level": _int(char.get("level"), 1),
+                "maxLevel": max_level,
                 "evolvePhase": _int(char.get("evolvePhase"), 0),
                 "potentialRank": _int(char.get("potentialRank"), 0),
                 "mainSkillLvl": _int(char.get("mainSkillLvl"), 1),
@@ -1425,6 +1429,60 @@ async def account_asset_remove(request: Request, uid: int):
     return RedirectResponse(f"/admin/accounts/{uid}#assets", status_code=303)
 
 
+def _levelup_operator(user, char, meta, target_level):
+    """Apply the in-game EXP-card upgrade server-side.
+
+    This is the admin fallback for clients whose level-up button does not send
+    /charBuild/upgradeChar.  It consumes the same 2001-2004 cards and uses the
+    same exp/gold curves as the game endpoint, stopping at target_level.
+    """
+    const = game_data.excel("gamedata_const.json") or {}
+    rarity = _int(str(meta.get("rarity") or "TIER_1").replace("TIER_", ""), 1)
+    index = max(0, 5 - rarity)
+    exp_maps = const.get("characterExpMap") or []
+    gold_maps = const.get("characterUpgradeCostMap") or []
+    exp_curve = exp_maps[index] if index < len(exp_maps) else (exp_maps[-1] if exp_maps else [])
+    gold_curve = gold_maps[index] if index < len(gold_maps) else (gold_maps[-1] if gold_maps else [])
+    phases = meta.get("phases") or []
+    phase = min(max(0, _int(char.get("evolvePhase"), 0)), max(0, len(phases) - 1))
+    max_level = max(1, _int((phases[phase] or {}).get("maxLevel"), 1)) if phases else 90
+    target = min(max(1, _int(target_level, max_level)), max_level)
+    level = min(max(1, _int(char.get("level"), 1)), max_level)
+    exp = max(0, _int(char.get("exp"), 0))
+    status = user.setdefault("status", {})
+    gold = _int(status.get("gold"), 0)
+    inventory = user.setdefault("inventory", {})
+    values = {"2001": 200, "2002": 400, "2003": 1000, "2004": 2000}
+    used = {}
+    while level < target:
+        need = _int(exp_curve[level - 1] if level - 1 < len(exp_curve) else -1, -1)
+        cost = _int(gold_curve[level - 1] if level - 1 < len(gold_curve) else -1, -1)
+        if need < 0 or cost < 0:
+            break
+        if exp < need:
+            consumed = False
+            for item_id in ("2001", "2002", "2003", "2004"):
+                if _int(inventory.get(item_id), 0) <= 0:
+                    continue
+                inventory[item_id] = _int(inventory.get(item_id), 0) - 1
+                exp += values[item_id]
+                used[item_id] = used.get(item_id, 0) + 1
+                consumed = True
+                break
+            if not consumed:
+                break
+            continue
+        if gold < cost:
+            break
+        exp -= need
+        gold -= cost
+        level += 1
+    char["level"] = level
+    char["exp"] = exp
+    status["gold"] = gold
+    return level, exp, used
+
+
 @router.post("/accounts/{uid}/operator/{inst_id}")
 async def account_operator_update(request: Request, uid: int, inst_id: str):
     redirect = need_login(request)
@@ -1438,6 +1496,12 @@ async def account_operator_update(request: Request, uid: int, inst_id: str):
     char = (user.get("troop", {}).get("chars") or {}).get(str(inst_id))
     if isinstance(char, dict):
         meta = game_data.character(char.get("charId")) or {}
+        if str(form.get("action") or "") == "levelup":
+            level, exp, used = _levelup_operator(user, char, meta, form.get("target_level"))
+            _save_user(uid, user)
+            detail = "，消耗 " + "、".join(f"{k}×{v}" for k, v in used.items()) if used else ""
+            _flash(request, f"已按经验卡升级到 {level} 级（EXP {exp}）{detail}")
+            return RedirectResponse(f"/admin/accounts/{uid}#operators", status_code=303)
         if "evolvePhase" in form:
             phases = meta.get("phases") or []
             char["evolvePhase"] = min(max(0, _int(form.get("evolvePhase"), 0)), max(0, len(phases) - 1))
