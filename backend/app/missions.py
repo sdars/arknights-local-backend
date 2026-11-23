@@ -50,10 +50,9 @@ def _progress_done(node):
 def ensure_mission_state(user):
     """Repair legacy/template mission rows before the client sees them.
 
-    CONFIRMED (2) is also the state the client uses to render a mission row,
-    even while its progress is incomplete.  Keep it visible and let
-    ``claim_missions`` validate the progress; promote an IN_EFFECT row whose
-    progress has reached every target so it becomes collectable.
+    IN_EFFECT (1) renders an unfinished mission with its progress bar;
+    CONFIRMED (2) renders the claim button.  Keep those two states aligned with
+    the stored progress so incomplete rows cannot advertise a bogus claim.
     """
     root = mission_root(user)
     for bucket in (root.get("missions") or {}).values():
@@ -70,8 +69,8 @@ def ensure_mission_state(user):
             done = _progress_done(node)
             if state == 3:
                 continue
-            if state == 1 and done:
-                node["state"] = 2
+            if state in (1, 2):
+                node["state"] = 2 if done else 1
             elif state not in (0, 1, 2):
                 node["state"] = 1
     # The template is also used by accounts that already cleared story
@@ -177,6 +176,15 @@ def _next_mission_id(mission_id, mission_type):
     entry = game_data.mission(candidate)
     if not entry or entry.get("type") != mission_type:
         return None
+    current = game_data.mission(mission_id) or {}
+    current_group = current.get("missionGroup")
+    candidate_group = entry.get("missionGroup")
+    # SUB chains such as sub_1..sub_6 are one group and end there.  The next
+    # numeric id (sub_7) belongs to a different mission set and must not be
+    # injected into the current page after claiming the last visible item.
+    if mission_type != "MAIN" and current_group and candidate_group:
+        if str(current_group) != str(candidate_group):
+            return None
     return candidate
 
 
@@ -280,13 +288,45 @@ def claim_missions(user, mission_ids, source="mission"):
 
 
 def auto_confirm(user, mission_type):
-    mission_type = str(mission_type or "MAIN").upper()
-    bucket = mission_bucket(user, mission_type, create=False)
-    ids = [
-        mission_id
-        for mission_id, node in bucket.items()
-        if isinstance(node, dict) and int(node.get("state", 0) or 0) == 2
-    ]
+    mission_types = {
+        1: "MAIN",
+        2: "DAILY",
+        3: "WEEKLY",
+        4: "GUIDE",
+        5: "SUB",
+        6: "ACTIVITY",
+        7: "OPENSERVER",
+        8: "TOWERSEASON",
+        9: "RETRO",
+        10: "SPECIAL_OPERATOR",
+        11: "SPECIAL_OPERATOR_WEEKLY",
+        12: "GUIDE_V3",
+    }
+    # AutoConfirmMissionsRequest.type is a MissionType enum.  Capture shows
+    # this client sending "MAIN"; other clients serialize the same field as an
+    # integer, so accept both forms instead of looking up the string "5".
+    if isinstance(mission_type, bool):
+        mission_type = "MAIN"
+    elif isinstance(mission_type, int) or str(mission_type or "").isdigit():
+        mission_type = mission_types.get(int(mission_type), "")
+    else:
+        mission_type = str(mission_type or "MAIN").upper()
+    # The MAIN page contains both MAIN and SUB missions, and its claim-all
+    # button sends only MissionType.MAIN.  Confirm both buckets so the visible
+    # SUB rows are actually claimed instead of returning result=0/claimed=[].
+    bucket_types = [mission_type]
+    if mission_type == "MAIN":
+        bucket_types.append("SUB")
+    elif mission_type == "GUIDE":
+        bucket_types.append("GUIDE_V3")
+    ids = []
+    for bucket_type in bucket_types:
+        bucket = mission_bucket(user, bucket_type, create=False)
+        ids.extend(
+            mission_id
+            for mission_id, node in bucket.items()
+            if isinstance(node, dict) and int(node.get("state", 0) or 0) == 2
+        )
     return claim_missions(user, ids, source="mission-auto")
 
 
@@ -392,4 +432,6 @@ def record_stage_clear(user, stage_id, complete_state, kill_count=0, assist=Fals
             if complete or done:
                 node["state"] = 2
                 completed.append(mission_id)
+            elif int(node.get("state", 0) or 0) != 3:
+                node["state"] = 1
     return completed

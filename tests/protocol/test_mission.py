@@ -42,7 +42,8 @@ def _complete(user, mission_type, mission_id):
 def test_confirm_mission_grants_and_persists(client, login, test_account):
     before = _user(test_account["uid"])
     before_cards = int(before.get("inventory", {}).get("2001", 0) or 0)
-    assert before["mission"]["missions"]["MAIN"]["main_1"]["state"] == 2
+    stage = before.setdefault("dungeon", {}).setdefault("stages", {}).setdefault("main_00-01", {})
+    stage.update({"state": 3, "completeTimes": max(1, int(stage.get("completeTimes", 0) or 0))})
     _complete(before, "MAIN", "main_1")
     _save_user(test_account["uid"], before)
 
@@ -101,13 +102,13 @@ def test_in_progress_mission_cannot_be_claimed(client, login, test_account):
     assert after["inventory"].get("2001", 0) == before_cards
 
 
-def test_mission_repair_keeps_confirmed_rows_visible():
+def test_mission_repair_matches_state_to_progress():
     user = _template()
     daily = user["mission"]["missions"]["DAILY"]
     daily["daily_7102"] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
     daily["daily_7101"] = {"state": 1, "progress": [{"value": 1, "target": 1}]}
     missions.ensure_mission_state(user)
-    assert daily["daily_7102"]["state"] == 2
+    assert daily["daily_7102"]["state"] == 1
     assert daily["daily_7101"]["state"] == 2
 
 
@@ -118,10 +119,38 @@ def test_claim_rejects_confirmed_but_incomplete_mission():
     before_cards = int(user.get("inventory", {}).get("2001", 0) or 0)
     result = missions.claim_missions(user, ["daily_7102"])
     assert result["claimed"] == []
-    assert result["skipped"][0]["reason"] == "progress-incomplete"
+    assert result["skipped"][0]["reason"] == "not-completed"
     assert result["items"] == []
-    assert daily["daily_7102"]["state"] == 2
+    assert daily["daily_7102"]["state"] == 1
     assert int(user.get("inventory", {}).get("2001", 0) or 0) == before_cards
+
+
+def test_auto_confirm_accepts_numeric_mission_type_enum():
+    user = _template()
+    _complete(user, "SUB", "sub_1")
+    result = missions.auto_confirm(user, 5)
+    assert result["result"] == 0
+    assert result["claimed"] == ["sub_1"]
+    assert user["mission"]["missions"]["SUB"]["sub_1"]["state"] == 3
+
+
+def test_main_claim_all_also_confirms_visible_sub_missions():
+    user = _template()
+    _complete(user, "SUB", "sub_1")
+    _complete(user, "SUB", "sub_2")
+    result = missions.auto_confirm(user, "MAIN")
+    assert result["result"] == 0
+    assert set(result["claimed"]) >= {"sub_1", "sub_2"}
+    assert user["mission"]["missions"]["SUB"]["sub_1"]["state"] == 3
+    assert user["mission"]["missions"]["SUB"]["sub_2"]["state"] == 3
+
+
+def test_claiming_last_sub_mission_does_not_cross_mission_groups():
+    user = _template()
+    _complete(user, "SUB", "sub_6")
+    result = missions.claim_missions(user, ["sub_6"])
+    assert result["claimed"] == ["sub_6"]
+    assert "sub_7" not in user["mission"]["missions"]["SUB"]
 
 
 def test_mission_repair_restores_cleared_main_stage():
@@ -144,7 +173,7 @@ def test_stage_clear_progresses_visible_daily_mission():
     daily["daily_7102"] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
     missions.record_stage_clear(user, "main_00-01", 3)
     assert daily["daily_7102"]["progress"][0]["value"] == 1
-    assert daily["daily_7102"]["state"] == 2
+    assert daily["daily_7102"]["state"] == 1
     missions.record_stage_clear(user, "main_00-01", 3)
     assert daily["daily_7102"]["progress"][0]["value"] == 2
     assert daily["daily_7102"]["state"] == 2
@@ -169,7 +198,7 @@ def test_confirm_mission_list_and_group_rewards(client, login, test_account):
     auto = client.post(
         f"{client.base_url}/mission/autoConfirmMissions",
         headers=login["headers"],
-        json={"type": "GUIDE"},
+        json={"type": 4},
         timeout=15,
     ).json()
     assert auto["result"] == 0
