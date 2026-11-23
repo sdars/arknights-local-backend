@@ -97,6 +97,9 @@ async def sync_data(request: Request):
     if not account:
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
+    inventory = user.setdefault("inventory", {})
+    for item_id in ("2001", "2002", "2003", "2004"):
+        inventory.setdefault(item_id, 0)
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
     status = user.setdefault("status", {})
@@ -1049,11 +1052,14 @@ async def char_build_upgrade_char(request: Request):
     meta, _rarity, exp_curve, gold_curve = _char_curves(char.get("charId"))
     max_level = _phase_max_level(meta, _as_int(char.get("evolvePhase"), 0))
     level = max(1, min(_as_int(char.get("level"), 1), max_level))
+    if level >= max_level:
+        return {"result": 1, "error": "该干员已达最大等级"}
     total_exp = max(0, _as_int(char.get("exp"), 0))
     inventory = user.setdefault("inventory", {})
     exp_values = {"2001": 200, "2002": 400, "2003": 1000, "2004": 2000}
     gained = 0
     used_item_ids = []
+    requested_items = []
     for raw in body.get("expMats") or []:
         if not isinstance(raw, dict):
             continue
@@ -1064,13 +1070,18 @@ async def char_build_upgrade_char(request: Request):
         have = _as_int(inventory.get(item_id), 0)
         if have < count:
             return {"result": 1, "error": f"{item_id} 不足"}
+        requested_items.append((item_id, count))
+        if item_id not in used_item_ids:
+            used_item_ids.append(item_id)
+        gained += exp_values[item_id] * count
+    if gained <= 0:
+        return {"result": 1, "error": "没有可使用的经验卡"}
+    for item_id, count in requested_items:
+        have = _as_int(inventory.get(item_id), 0)
         if have == count:
             inventory.pop(item_id, None)
         else:
             inventory[item_id] = have - count
-        if item_id not in used_item_ids:
-            used_item_ids.append(item_id)
-        gained += exp_values[item_id] * count
     total_exp += gained
     gold = _as_int((user.get("status") or {}).get("gold"), 0)
     while level < max_level:

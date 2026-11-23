@@ -1,6 +1,7 @@
 import time
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -11,6 +12,7 @@ from . import battles, mail_service, payments
 from .routers import admin, config_api, game, sdk
 
 app = FastAPI(title="Arknights Local Backend", docs_url=None, redoc_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
