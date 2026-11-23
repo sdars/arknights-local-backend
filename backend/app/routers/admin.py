@@ -472,6 +472,7 @@ async def gacha_page(request: Request, q: str = "", status: str = "", page: int 
     if redirect:
         return redirect
     rows = _gacha_rows(q=q, status=status)
+    open_count = sum(1 for row in _gacha_rows() if row["is_active"] and row["client_open"])
     page_size = 80
     page = max(1, int(page or 1))
     total = len(rows)
@@ -486,6 +487,7 @@ async def gacha_page(request: Request, q: str = "", status: str = "", page: int 
             "active": "gacha",
             "pools": rows,
             "total": total,
+            "open_count": open_count,
             "page": page,
             "pages": pages,
             "q": q,
