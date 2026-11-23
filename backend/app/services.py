@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .config import PLAYER_TEMPLATE, SERVER_NAME
 from .db import connect, now_ts
+from .missions import ensure_mission_state
 from .security import new_token
 
 
@@ -31,6 +32,7 @@ def create_account(phone, token=None, nickname="博士"):
             return dict(exists), False
         uid = next_uid(conn)
         user = player_template()
+        ensure_mission_state(user)
         status = user.setdefault("status", {})
         ts = now_ts()
         status["uid"] = str(uid)

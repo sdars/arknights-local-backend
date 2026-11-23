@@ -32,6 +32,83 @@ def mission_bucket(user, mission_type, create=False):
     return bucket
 
 
+def _progress_done(node):
+    progress = node.get("progress")
+    if not isinstance(progress, list) or not progress:
+        return False
+    seen = False
+    for item in progress:
+        if not isinstance(item, dict):
+            continue
+        seen = True
+        target = max(1, int(item.get("target", 1) or 1))
+        if int(item.get("value", 0) or 0) < target:
+            return False
+    return seen
+
+
+def ensure_mission_state(user):
+    """Repair legacy/template mission rows before the client sees them.
+
+    CONFIRMED (2) is also the state the client uses to render a mission row,
+    even while its progress is incomplete.  Keep it visible and let
+    ``claim_missions`` validate the progress; promote an IN_EFFECT row whose
+    progress has reached every target so it becomes collectable.
+    """
+    root = mission_root(user)
+    for bucket in (root.get("missions") or {}).values():
+        if not isinstance(bucket, dict):
+            continue
+        for node in bucket.values():
+            if not isinstance(node, dict):
+                continue
+            progress = node.get("progress")
+            if not isinstance(progress, list) or not progress:
+                node["progress"] = [{"value": 0, "target": 1}]
+                progress = node["progress"]
+            state = int(node.get("state", 0) or 0)
+            done = _progress_done(node)
+            if state == 3:
+                continue
+            if state == 1 and done:
+                node["state"] = 2
+            elif state not in (0, 1, 2):
+                node["state"] = 1
+    # The template is also used by accounts that already cleared story
+    # stages.  Restore the one-shot CompleteStage/CompleteMainStage missions
+    # from the authoritative dungeon clear flags instead of leaving them at
+    # IN_EFFECT after the template repair.
+    stages = (user.get("dungeon") or {}).get("stages") or {}
+    if isinstance(stages, dict):
+        for bucket in (root.get("missions") or {}).values():
+            if not isinstance(bucket, dict):
+                continue
+            for mission_id, node in bucket.items():
+                if not isinstance(node, dict):
+                    continue
+                entry = game_data.mission(mission_id) or {}
+                template = str(entry.get("template") or "")
+                if template not in {"CompleteStage", "CompleteMainStage"}:
+                    continue
+                params = [str(value) for value in entry.get("param") or []]
+                stage_id = next((value for value in params if value in stages), "")
+                if not stage_id:
+                    continue
+                stage = stages.get(stage_id)
+                if not isinstance(stage, dict) or int(stage.get("state", 0) or 0) < 3:
+                    continue
+                progress = node.get("progress")
+                if isinstance(progress, list):
+                    for item in progress:
+                        if isinstance(item, dict):
+                            item["value"] = max(
+                                int(item.get("value", 0) or 0),
+                                int(item.get("target", 1) or 1),
+                            )
+                if int(node.get("state", 0) or 0) != 3:
+                    node["state"] = 2
+
+
 def _next_mission_id(mission_id, mission_type):
     match = re.match(r"^(.*_)(\d+)$", str(mission_id or ""))
     if not match:
@@ -81,6 +158,7 @@ def _success(items, extra=None):
 
 
 def claim_missions(user, mission_ids, source="mission"):
+    ensure_mission_state(user)
     root = mission_root(user)
     claimed = []
     skipped = []
@@ -101,8 +179,26 @@ def claim_missions(user, mission_ids, source="mission"):
         if not isinstance(node, dict):
             skipped.append({"missionId": mission_id, "reason": "not-in-save"})
             continue
-        if int(node.get("state", 0) or 0) == 3:
+        state = int(node.get("state", 0) or 0)
+        if state == 3:
             skipped.append({"missionId": mission_id, "reason": "already-claimed"})
+            continue
+        if state != 2:
+            # 1 = IN_EFFECT (still in progress), 0 = NOT_OPEN.  Only a
+            # CONFIRMED mission may be collected; otherwise the client could
+            # claim every mission simply because it exists in the save.
+            skipped.append(
+                {"missionId": mission_id, "reason": "not-completed", "state": state}
+            )
+            continue
+        if not _progress_done(node):
+            skipped.append(
+                {
+                    "missionId": mission_id,
+                    "reason": "progress-incomplete",
+                    "state": state,
+                }
+            )
             continue
 
         reward_items.extend(entry.get("rewards") or [])
@@ -186,7 +282,10 @@ def record_stage_clear(user, stage_id, complete_state):
         if not isinstance(bucket, dict):
             continue
         for mission_id, node in bucket.items():
-            if not isinstance(node, dict) or int(node.get("state", 0) or 0) != 1:
+            if not isinstance(node, dict):
+                continue
+            state = int(node.get("state", 0) or 0)
+            if state not in (1, 2):
                 continue
             entry = game_data.mission(mission_id)
             if not entry:

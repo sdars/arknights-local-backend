@@ -102,6 +102,7 @@ async def sync_data(request: Request):
         inventory.setdefault(item_id, 0)
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
+    missions.ensure_mission_state(user)
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
@@ -130,6 +131,7 @@ async def sync_status(request: Request):
     user = player_data(account)
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
+    missions.ensure_mission_state(user)
     ts = now_ts()
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
@@ -190,6 +192,7 @@ async def sync_push_message(request: Request):
     user = player_data(account)
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
+    missions.ensure_mission_state(user)
     ts = now_ts()
     status = user.setdefault("status", {})
     status["lastOnlineTs"] = ts
@@ -1545,6 +1548,7 @@ async def gacha_sync_normal(request: Request):
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
     gacha_service.ensure_gacha_state(user)
+    missions.ensure_mission_state(user)
     recruit = gacha_service.public_recruit_state(user)
     save_player(account, user)
     return {
