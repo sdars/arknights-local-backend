@@ -40,11 +40,12 @@
     <label>复制基础卡池<input class="mono" name="base_pool" value="{{ pool.get('basePool') or '' }}" placeholder="仅自定义卡池需要"></label>
     <label>保底 5★
       <select name="guarantee5">
-        <option value="1" {% if pool.get('guarantee5Avail') %}selected{% endif %}>十连保底</option>
+        <option value="1" {% if pool.get('guarantee5Avail') %}selected{% endif %}>N 次内 5★ 保底（单抽/十连共享）</option>
         <option value="0" {% if not pool.get('guarantee5Avail') %}selected{% endif %}>不保底</option>
       </select>
     </label>
     <label>保底次数<input type="number" name="guarantee5_count" value="{{ pool.get('guarantee5Count', 10) }}" min="1"></label>
+    <div class="span-all"><p class="muted small-note">保底次数按卡池累计，单抽和十连共用同一进度；触发 5★ 或达到次数后本轮保底结束。</p></div>
     <div class="span-all"><p class="muted small-note">概率单位是百分比，四项合计应为 100。6★ 概率会按累计保底自动提升。</p></div>
     <label>6★ 概率 %<input type="number" step="0.001" name="rate6_percent" value="{{ pool.rate6_percent }}" min="0"></label>
     <label>5★ 概率 %<input type="number" step="0.001" name="rate5_percent" value="{{ pool.rate5_percent }}" min="0"></label>
