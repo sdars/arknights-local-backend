@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "resource_picker.html" import picker %}
+{% set active = 'products' %}
+{% block title %}{{ product.name }} · 商品内容{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">PRODUCT CONTENT</p>
+    <h1>{{ product.name }}</h1>
+    <p class="muted mono">{{ product.product_id }} · store {{ product.store_id }} · ￥{{ '%.2f'|format(product.price / 100) }}</p>
+  </div>
+  <div class="actions"><a class="btn" href="/admin/products">返回商品</a></div>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>发放内容</h2><span class="muted">付款成功后按以下内容发放；支持物品、干员、皮肤、头像与家具</span></div>
+  <form method="post" action="/admin/products/{{ product.product_id }}/content">
+    {{ picker(grant_items) }}
+    <p class="muted small-note">搜索并点击资源加入列表，数量可自由修改。提交时会再次校验资源 ID，不存在的 ID 会被拦截。</p>
+    <div class="actions"><button class="primary" type="submit">保存发放内容</button></div>
+  </form>
+</section>
+{% endblock %}

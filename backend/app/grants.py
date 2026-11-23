@@ -287,6 +287,12 @@ def _grant_char(user, char_id, count, now, touched):
     if existing:
         inventory = _dict(user, "inventory")
         _add(inventory, f"p_{char_id}", count)
+        dex = _dict(user, "dexNav")
+        dex_chars = _dict(dex, "character")
+        entry = dex_chars.get(char_id)
+        if isinstance(entry, dict):
+            entry["count"] = _int(entry.get("count")) + max(0, count)
+        touched.add("dexNav")
         touched.update(("troop", "inventory"))
         return
 
@@ -300,11 +306,22 @@ def _grant_char(user, char_id, count, now, touched):
         chars[str(inst_id)] = data
         char_group = _dict(troop, "charGroup")
         char_group[char_id] = {"favorPoint": 0}
+        if _int(troop.get("curCharInstId"), 0) <= 0:
+            troop["curCharInstId"] = inst_id
+        dex = _dict(user, "dexNav")
+        dex_chars = _dict(dex, "character")
+        entry = dex_chars.get(char_id)
+        if isinstance(entry, dict):
+            entry["count"] = _int(entry.get("count")) + 1
+            entry.setdefault("classicCount", 0)
+            entry.setdefault("charInstId", inst_id)
+        else:
+            dex_chars[char_id] = {"classicCount": 0, "charInstId": inst_id, "count": 1}
         building = _dict(user, "building")
         building_chars = _dict(building, "chars")
         building_chars[str(inst_id)] = _building_character(char_id, now)
         inventory.setdefault(f"p_{char_id}", 0)
-    touched.update(("troop", "building", "inventory"))
+    touched.update(("troop", "building", "inventory", "dexNav"))
 
 
 def _grant_monthly_card(user, count, now, touched):

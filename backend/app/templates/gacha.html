@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% set active = 'gacha' %}
+{% block title %}寻访管理{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">GACHA CONTROL</p>
+    <h1>寻访管理</h1>
+    <p class="muted">共 {{ total }} 个卡池。可修改概率、价格、保底、UP 干员与开放时间，也可以基于现有卡池上线新卡池。</p>
+  </div>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>上线新卡池</h2><span class="muted">基于现有卡池复制，并在详情页继续调整</span></div>
+  <form class="form-grid" method="post" action="/admin/gacha/create">
+    <label>卡池 ID<input class="mono" name="pool_id" placeholder="NORM_CUSTOM_1" required></label>
+    <label>名称<input name="name" placeholder="自定义寻访" required></label>
+    <label>基础卡池<input class="mono" name="base_pool" value="NORM_79_0_3" required></label>
+    <label>开放时间<input type="datetime-local" name="open_time"></label>
+    <label>结束时间<input type="datetime-local" name="end_time"></label>
+    <label>单抽价格（合成玉）<input type="number" name="single_price" value="600" min="0"></label>
+    <label>十连价格（合成玉）<input type="number" name="ten_price" value="6000" min="0"></label>
+    <label class="span-all">UP 干员 ID（逗号分隔）<input class="mono" name="up_chars" placeholder="char_103_angel,char_112_siege"></label>
+    <div class="actions span-all"><button class="primary" type="submit">上线新卡池</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <form class="inline-form" method="get" action="/admin/gacha">
+    <label>搜索卡池 ID / 名称<input name="q" value="{{ q }}" placeholder="NORM_79 / 将雪投火"></label>
+    <label>状态
+      <select name="status">
+        <option value="" {% if not status_filter %}selected{% endif %}>全部</option>
+        <option value="active" {% if status_filter == 'active' %}selected{% endif %}>当前开放</option>
+        <option value="disabled" {% if status_filter == 'disabled' %}selected{% endif %}>已关闭</option>
+      </select>
+    </label>
+    <button class="primary" type="submit">筛选</button>
+    {% if q or status_filter %}<a class="btn" href="/admin/gacha">清除</a>{% endif %}
+  </form>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th>卡池</th><th>开放时间</th><th>结束时间</th><th>单抽</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for row in pools %}
+        <tr>
+          <td>{{ row.name }}<div class="muted mono">{{ row.pool_id }}</div></td>
+          <td class="mono small-note">{{ row.open_text or '未设置' }}</td>
+          <td class="mono small-note">{{ row.end_text or '未设置' }}</td>
+          <td>{{ row.get('singlePrice', 600) }}</td>
+          <td>{% if row.is_active %}<span class="status s2">开放中</span>{% else %}<span class="status s3">未开放</span>{% endif %}</td>
+          <td><a class="btn" href="/admin/gacha/{{ row.pool_id }}">编辑</a></td>
+        </tr>
+      {% else %}<tr><td colspan="6" class="muted">没有卡池。</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <div class="actions">
+    {% if page > 1 %}<a class="btn" href="/admin/gacha?q={{ q }}&status={{ status_filter }}&page={{ page - 1 }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page }} / {{ pages }} 页</span>
+    {% if page < pages %}<a class="btn" href="/admin/gacha?q={{ q }}&status={{ status_filter }}&page={{ page + 1 }}">下一页</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set active = 'products' %}
+{% block title %}商品管理{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">PRODUCT CATALOG</p>
+    <h1>商品管理</h1>
+    <p class="muted">共 {{ total }} 个商品。价格以分为单位（64800 = ￥648.00），修改后新订单立即按新价格创建。</p>
+  </div>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>新增商品</h2><span class="muted">不填 store_id 会自动分配</span></div>
+  <form class="form-grid" method="post" action="/admin/products/create">
+    <label>商品 ID<input class="mono" name="product_id" placeholder="GP_New_1" required></label>
+    <label>AppStore ID<input class="mono" name="appstore_id" placeholder="留空则同商品 ID"></label>
+    <label>store_id<input type="number" name="store_id" min="1" placeholder="自动"></label>
+    <label>名称<input name="name" required></label>
+    <label>价格（分）<input type="number" name="price" min="0" value="600"></label>
+    <label>平台
+      <select name="platform"><option value="2">通用 / Android</option><option value="1">Android</option><option value="2">iOS</option></select>
+    </label>
+    <label>状态
+      <select name="status"><option value="1">上架</option><option value="0">下架</option></select>
+    </label>
+    <label class="span-all">描述<input name="desc"></label>
+    <div class="actions span-all"><button class="primary" type="submit">创建商品</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <form class="inline-form" method="get" action="/admin/products">
+    <label>搜索 ID / 名称 / store_id<input name="q" value="{{ q }}" placeholder="GP_Once_384 / 医疗芯片礼包"></label>
+    <button class="primary" type="submit">搜索</button>
+    {% if q %}<a class="btn" href="/admin/products">清除</a>{% endif %}
+  </form>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th>商品</th><th>store</th><th>价格</th><th>平台</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for row in products %}
+        <tr>
+          <td>
+            <form id="pf-{{ loop.index }}" method="post" action="/admin/products/{{ row.product_id }}/update"></form>
+            <input form="pf-{{ loop.index }}" class="mono small-input" name="product_id" value="{{ row.product_id }}" readonly>
+            <input form="pf-{{ loop.index }}" class="small-input" name="name" value="{{ row.name }}">
+            <input form="pf-{{ loop.index }}" class="mono small-input" name="appstore_id" value="{{ row.appstore_id }}">
+            <input form="pf-{{ loop.index }}" class="mono small-input" name="desc" value="{{ row.desc or '' }}" placeholder="描述">
+          </td>
+          <td><input form="pf-{{ loop.index }}" class="mono small-input" type="number" name="store_id" value="{{ row.store_id }}" min="1"></td>
+          <td>
+            <input form="pf-{{ loop.index }}" class="mono small-input" type="number" name="price" value="{{ row.price }}" min="0">
+            <div class="muted">￥{{ row.price_yuan }}</div>
+          </td>
+          <td><input form="pf-{{ loop.index }}" class="mono small-input" type="number" name="platform" value="{{ row.platform }}" min="1"></td>
+          <td>{% if row.status|int == 1 %}<span class="status s2">上架</span>{% else %}<span class="status s3">下架</span>{% endif %}</td>
+          <td>
+            <select form="pf-{{ loop.index }}" name="status"><option value="1" {% if row.status|int == 1 %}selected{% endif %}>上架</option><option value="0" {% if row.status|int != 1 %}selected{% endif %}>下架</option></select>
+            <button form="pf-{{ loop.index }}" class="primary" type="submit">保存</button>
+            <a class="btn" href="/admin/products/{{ row.product_id }}">内容</a>
+            <form method="post" action="/admin/products/{{ row.product_id }}/delete" onsubmit="return confirm('确定下架该商品？')"><button class="danger" type="submit">下架</button></form>
+          </td>
+        </tr>
+      {% else %}<tr><td colspan="6" class="muted">没有商品。</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <div class="actions">
+    {% if page > 1 %}<a class="btn" href="/admin/products?q={{ q }}&page={{ page - 1 }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page }} / {{ pages }} 页</span>
+    {% if page < pages %}<a class="btn" href="/admin/products?q={{ q }}&page={{ page + 1 }}">下一页</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

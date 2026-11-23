@@ -1,7 +1,7 @@
 import json
 import logging
+import random
 import time
-import uuid
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,6 +12,7 @@ from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response
 from .. import (
     battles,
+    gacha_service,
     game_data,
     grants,
     mail_service,
@@ -117,17 +118,88 @@ async def sync_status(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    ts = now_ts()
+    status = user.setdefault("status", {})
+    status["uid"] = str(account["uid"])
+    status["nickName"] = account["nickname"] or "博士"
+    status["serverName"] = runtime_settings.values()["server_name"]
+    status["lastOnlineTs"] = ts
+    status["lastRefreshTs"] = ts
+    push = user.setdefault("pushFlags", {})
+    push["hasGifts"] = 1 if mail_service.unread_count(account["uid"]) else 0
+    params = body.get("params") if isinstance(body, dict) else None
+    params = params if isinstance(params, dict) else {}
+    purchase_param = params.get("16") or params.get(16) or {}
+    good_map = purchase_param.get("goodIdMap") if isinstance(purchase_param, dict) else {}
+    state = shop_service.purchase_state(user, good_map if isinstance(good_map, dict) else {})
+    result = {
+        "16": {
+            "goodPurchaseState": {
+                "result": state,
+                "playerDataDelta": {"deleted": {}, "modified": {}},
+            }
+        }
+    }
+    modules = _as_int(body.get("modules"), 0) if isinstance(body, dict) else 0
+    if modules & 2048:
+        result["2048"] = {"gacha": [], "shop": []}
+    save_player(account, user)
+    modified = {
+        key: user.get(key)
+        for key in (
+            "status",
+            "pushFlags",
+            "troop",
+            "inventory",
+            "gacha",
+            "shop",
+            "dungeon",
+            "skin",
+            "dexNav",
+            "consumable",
+            "recruit",
+            "exgachadata",
+        )
+        if key in user
+    }
     return {
-        "result": {},
-        "ts": now_ts(),
+        "result": result,
+        "ts": ts,
         "pushMessage": [],
-        **empty_delta(),
+        "playerDataDelta": {"deleted": {}, "modified": modified},
     }
 
 
 @router.post("/account/syncPushMessage")
-async def sync_push_message():
-    return {"result": 0, "pushMessage": [], **empty_delta()}
+async def sync_push_message(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    ts = now_ts()
+    status = user.setdefault("status", {})
+    status["lastOnlineTs"] = ts
+    status["lastRefreshTs"] = ts
+    save_player(account, user)
+    return {
+        "result": 0,
+        "now": ts,
+        "next": ts + 60,
+        "pushMessage": [],
+        "playerDataDelta": {
+            "deleted": {},
+            "modified": {
+                key: user.get(key)
+                for key in ("status", "pushFlags", "troop", "inventory", "gacha", "shop", "dungeon", "skin", "dexNav", "consumable")
+                if key in user
+            },
+        },
+    }
 
 
 @router.post("/quest/battleStart")
@@ -137,7 +209,12 @@ async def battle_start(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     template = json.loads(BATTLE_START_TEMPLATE.read_text(encoding="utf-8"))
-    battle_id = str(uuid.uuid4())
+    stage = str(body.get("stageId", "guide_01"))
+    if not game_data.stage(stage):
+        return {"result": 1, "error": f"unknown stage: {stage}"}
+    # The client encrypts this value into battleFinish's battleId.  The official
+    # server uses the stage id here, and the client sends it back unchanged.
+    battle_id = stage
     template["battleId"] = battle_id
     template["result"] = 0
     modified = template.setdefault("playerDataDelta", {}).setdefault("modified", {})
@@ -145,7 +222,6 @@ async def battle_start(request: Request):
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
     status["serverName"] = runtime_settings.values()["server_name"]
-    stage = body.get("stageId", "guide_01")
     user = player_data(account)
     stages_user = user.setdefault("dungeon", {}).setdefault("stages", {})
     stage_node = stages_user.get(stage)
@@ -534,11 +610,6 @@ async def change_squad_name(request: Request):
     }
 
 
-@router.post("/charBuild/batchSetCharVoiceLan")
-async def batch_set_voice():
-    return {"result": 0, **empty_delta()}
-
-
 @router.post("/pay/getUnconfirmedOrderIdList")
 async def unconfirmed_orders():
     return {"result": 0, "orderIdList": []}
@@ -732,8 +803,12 @@ async def rep_good_list():
 
 
 @router.post("/shop/getSocialGoodList")
-async def social_good_list():
-    return shop_response("SocialGoodList.json")
+async def social_good_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    return shop_service.decorate_social_payload(user)
 
 
 @router.post("/shop/getClassicGoodList")
@@ -817,4 +892,738 @@ async def buy_gp_good_with_ticket(request: Request):
     if result.get("result") == 0:
         save_player(account, user)
     return result
+
+
+def _char_by_inst(user, inst_id):
+    chars = (user.get("troop") or {}).get("chars") or {}
+    return chars.get(str(inst_id)), chars
+
+
+def _sync_skill_unlocks(char, meta):
+    phase = _as_int(char.get("evolvePhase"), 0)
+    skills = char.get("skills")
+    if not isinstance(skills, list):
+        skills = []
+        char["skills"] = skills
+    meta_skills = {str(skill.get("skillId")): skill for skill in meta.get("skills") or [] if isinstance(skill, dict)}
+    for skill in skills:
+        if not isinstance(skill, dict):
+            continue
+        source = meta_skills.get(str(skill.get("skillId"))) or {}
+        needed = str((source.get("unlockCond") or {}).get("phase") or "PHASE_0")
+        needed_phase = _as_int(needed.replace("PHASE_", ""), 0)
+        skill["unlock"] = 1 if phase >= needed_phase else 0
+    unlocked = [index for index, skill in enumerate(skills) if isinstance(skill, dict) and _as_int(skill.get("unlock"), 0)]
+    if _as_int(char.get("defaultSkillIndex"), -1) not in unlocked:
+        char["defaultSkillIndex"] = unlocked[0] if unlocked else -1
+
+
+def _char_response(user, touched=("troop", "inventory", "status")):
+    modified = {key: user.get(key) for key in touched if key in user}
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": modified}}
+
+
+def _gamedata_const():
+    return game_data.excel("gamedata_const.json") or {}
+
+
+def _char_curves(char_id):
+    meta = game_data.character(char_id) or {}
+    rarity = _as_int(str(meta.get("rarity") or "TIER_1").replace("TIER_", ""), 1)
+    index = max(0, 5 - rarity)
+    const = _gamedata_const()
+    exp_maps = const.get("characterExpMap") or []
+    gold_maps = const.get("characterUpgradeCostMap") or []
+    exp = exp_maps[index] if index < len(exp_maps) else (exp_maps[-1] if exp_maps else [])
+    gold = gold_maps[index] if index < len(gold_maps) else (gold_maps[-1] if gold_maps else [])
+    return meta, rarity, exp, gold
+
+
+def _phase_max_level(meta, phase):
+    phases = meta.get("phases") or []
+    if not phases:
+        return 90
+    phase = min(max(0, phase), len(phases) - 1)
+    return max(1, _as_int((phases[phase] or {}).get("maxLevel"), 1))
+
+
+@router.post("/charBuild/upgradeChar")
+async def char_build_upgrade_char(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    meta, _rarity, exp_curve, gold_curve = _char_curves(char.get("charId"))
+    max_level = _phase_max_level(meta, _as_int(char.get("evolvePhase"), 0))
+    level = max(1, min(_as_int(char.get("level"), 1), max_level))
+    total_exp = max(0, _as_int(char.get("exp"), 0))
+    inventory = user.setdefault("inventory", {})
+    exp_values = {"2001": 200, "2002": 400, "2003": 1000, "2004": 2000}
+    gained = 0
+    for raw in body.get("expMats") or []:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or "")
+        count = max(0, _as_int(raw.get("count"), 0))
+        if item_id not in exp_values or count <= 0:
+            continue
+        have = _as_int(inventory.get(item_id), 0)
+        if have < count:
+            return {"result": 1, "error": f"{item_id} 不足"}
+        if have == count:
+            inventory.pop(item_id, None)
+        else:
+            inventory[item_id] = have - count
+        gained += exp_values[item_id] * count
+    total_exp += gained
+    gold = _as_int((user.get("status") or {}).get("gold"), 0)
+    while level < max_level:
+        need = _as_int(exp_curve[level - 1] if level - 1 < len(exp_curve) else -1, -1)
+        cost = _as_int(gold_curve[level - 1] if level - 1 < len(gold_curve) else -1, -1)
+        if need < 0 or cost < 0 or total_exp < need or gold < cost:
+            break
+        total_exp -= need
+        gold -= cost
+        level += 1
+    user.setdefault("status", {})["gold"] = gold
+    char["level"] = level
+    char["exp"] = total_exp
+    save_player(account, user)
+    return _char_response(user)
+
+
+@router.post("/charBuild/evolveChar")
+async def char_build_evolve_char(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    dest = body.get("destEvolvePhase")
+    if isinstance(dest, str):
+        dest = dest.replace("PHASE_", "")
+    dest = max(0, _as_int(dest, 0))
+    meta, rarity, _exp, _gold = _char_curves(char.get("charId"))
+    phases = meta.get("phases") or []
+    current = _as_int(char.get("evolvePhase"), 0)
+    if dest <= current or dest >= max(1, len(phases)):
+        return {"result": 1, "error": "invalid evolve phase"}
+    costs = _gamedata_const().get("evolveGoldCost") or []
+    row = costs[rarity - 1] if 0 < rarity <= len(costs) else []
+    cost = _as_int(row[dest - 1] if 0 < dest <= len(row) else 0, 0)
+    status = user.setdefault("status", {})
+    if cost > 0 and _as_int(status.get("gold"), 0) < cost:
+        return {"result": 1, "error": "龙门币不足"}
+    if cost > 0:
+        status["gold"] = _as_int(status.get("gold"), 0) - cost
+    char["evolvePhase"] = dest
+    char["level"] = min(_as_int(char.get("level"), 1), _phase_max_level(meta, dest))
+    _sync_skill_unlocks(char, meta)
+    save_player(account, user)
+    return _char_response(user)
+
+
+@router.post("/charBuild/evolveCharUseItem")
+async def char_build_evolve_use_item(request: Request):
+    return await char_build_evolve_char(request)
+
+
+@router.post("/charBuild/upgradeCharLevelMaxUseItem")
+async def char_build_level_max_item(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    inst_id = str(body.get("charInsId") or body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    item_id = str(body.get("itemId") or "")
+    if item_id:
+        inventory = user.setdefault("inventory", {})
+        have = _as_int(inventory.get(item_id), 0)
+        if have <= 0:
+            return {"result": 1, "error": "item not found"}
+        if have == 1:
+            inventory.pop(item_id, None)
+        else:
+            inventory[item_id] = have - 1
+    char["level"] = _phase_max_level(game_data.character(char.get("charId")) or {}, _as_int(char.get("evolvePhase"), 0))
+    save_player(account, user)
+    return _char_response(user)
+
+
+@router.post("/charBuild/upgradeSkill")
+async def char_build_upgrade_skill(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    target = max(1, min(7, _as_int(body.get("targetLevel"), 1)))
+    meta = game_data.character(char.get("charId")) or {}
+    chain = meta.get("allSkillLvlup") or []
+    index = target - 2
+    if index >= 0 and index < len(chain):
+        inventory = user.setdefault("inventory", {})
+        for cost in (chain[index] or {}).get("lvlUpCost") or []:
+            item_id = str(cost.get("id") or "")
+            count = _as_int(cost.get("count"), 0)
+            if not item_id or count <= 0:
+                continue
+            have = _as_int(inventory.get(item_id), 0)
+            if have < count:
+                return {"result": 1, "error": f"{item_id} 不足"}
+            if have == count:
+                inventory.pop(item_id, None)
+            else:
+                inventory[item_id] = have - count
+    char["mainSkillLvl"] = target
+    save_player(account, user)
+    return _char_response(user)
+
+
+@router.post("/charBuild/boostPotential")
+async def char_build_boost_potential(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    inst_id = str(body.get("charInstId") or "")
+    char, _ = _char_by_inst(user, inst_id)
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    item_id = str(body.get("itemId") or "")
+    target = max(0, min(5, _as_int(body.get("targetRank"), 0)))
+    inventory = user.setdefault("inventory", {})
+    amount = 1 if "_char_" in item_id else 4
+    have = _as_int(inventory.get(item_id), 0) if item_id else 0
+    if item_id and have < amount:
+        return {"result": 1, "error": "potential item not enough"}
+    if item_id:
+        if have == amount:
+            inventory.pop(item_id, None)
+        else:
+            inventory[item_id] = have - amount
+    char["potentialRank"] = target
+    save_player(account, user)
+    return _char_response(user)
+
+
+@router.post("/charBuild/setDefaultSkill")
+async def char_build_set_default_skill(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    char, _ = _char_by_inst(user, body.get("charInstId"))
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    index = _as_int(body.get("defaultSkillIndex"), -1)
+    skills = char.get("skills") or []
+    if index < 0 or index >= len(skills) or not _as_int((skills[index] or {}).get("unlock"), 0):
+        return {"result": 1, "error": "skill not unlocked"}
+    char["defaultSkillIndex"] = index
+    save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/setEquipment")
+async def char_build_set_equipment(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    char, _ = _char_by_inst(user, body.get("charInstId"))
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    equip_id = str(body.get("equipId") or body.get("equip") or "")
+    char["currentEquip"] = equip_id or None
+    save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/unlockEquipment")
+async def char_build_unlock_equipment(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    char, _ = _char_by_inst(user, body.get("charInstId"))
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    equip_id = str(body.get("equipId") or "")
+    if equip_id:
+        node = char.setdefault("equip", {}).setdefault(equip_id, {})
+        node["locked"] = 0
+        node.setdefault("level", 1)
+        node.setdefault("hide", 0)
+    save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/upgradeEquipment")
+async def char_build_upgrade_equipment(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    char, _ = _char_by_inst(user, body.get("charInstId"))
+    if not isinstance(char, dict):
+        return {"result": 1, "error": "char not found"}
+    equip_id = str(body.get("equipId") or "")
+    if equip_id:
+        node = char.setdefault("equip", {}).setdefault(equip_id, {})
+        node["locked"] = 0
+        node["level"] = max(1, min(3, _as_int(body.get("targetLevel"), _as_int(node.get("level"), 1))))
+    save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/setCharVoiceLan")
+async def char_build_set_voice(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    voice = str(body.get("voiceLan") or "CN_MANDARIN")
+    ids = body.get("charList") or []
+    if not isinstance(ids, list):
+        ids = [ids]
+    chars = (user.get("troop") or {}).get("chars") or {}
+    for inst_id in ids:
+        char = chars.get(str(inst_id))
+        if isinstance(char, dict):
+            char["voiceLan"] = voice
+    save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/batchSetCharVoiceLan")
+async def char_build_batch_voice(request: Request):
+    return await char_build_set_voice(request)
+
+
+@router.post("/charBuild/changeSkinSpState")
+async def char_build_change_skin(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    char, _ = _char_by_inst(user, body.get("charInstId"))
+    if isinstance(char, dict):
+        skin = body.get("skinId") or body.get("skin")
+        if skin:
+            char["skin"] = str(skin)
+        save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/upgradeSpecializedSkillUseItem")
+async def char_build_specialize(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    char, _ = _char_by_inst(user, body.get("charInstId"))
+    if isinstance(char, dict):
+        skills = char.get("skills") or []
+        index = _as_int(body.get("skillIndex"), 0)
+        if 0 <= index < len(skills) and isinstance(skills[index], dict):
+            skills[index]["specializeLevel"] = max(0, min(3, _as_int(body.get("targetLevel"), 1)))
+        save_player(account, user)
+    return _char_response(user, ("troop",))
+
+
+@router.post("/charBuild/addonStory/unlock")
+async def char_build_addon_story():
+    return {"result": 0, **empty_delta()}
+
+
+@router.post("/charBuild/lockChar")
+async def char_build_lock_char():
+    return {"result": 0, **empty_delta()}
+
+
+@router.post("/charBuild/sellChar")
+async def char_build_sell_char():
+    return {"result": 0, **empty_delta()}
+
+
+@router.post("/gacha/getPoolDetail")
+async def gacha_pool_detail(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    detail = gacha_service.pool_detail(body.get("poolId"))
+    if not detail:
+        return {"result": 1, "error": "pool not found"}
+    return detail
+
+
+def _gacha_response(account, user, result):
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/gacha/advancedGacha")
+async def gacha_advanced(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = gacha_service.draw(
+        user,
+        body.get("poolId"),
+        count=1,
+        use_tkt=body.get("useTkt"),
+        item_id=body.get("itemId") or "",
+    )
+    return _gacha_response(account, user, result)
+
+
+@router.post("/gacha/tenAdvancedGacha")
+async def gacha_ten_advanced(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    item_list = body.get("itemList") or []
+    item_id = ""
+    if isinstance(item_list, list):
+        for raw in item_list:
+            if isinstance(raw, dict) and raw.get("id"):
+                item_id = str(raw.get("id"))
+                break
+    result = gacha_service.draw(
+        user,
+        body.get("poolId"),
+        count=10,
+        use_tkt=body.get("useTkt"),
+        item_id=item_id,
+    )
+    return _gacha_response(account, user, result)
+
+
+@router.post("/gacha/syncNormalGacha")
+async def gacha_sync_normal(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    recruit = gacha_service.public_recruit_state(user)
+    save_player(account, user)
+    return {
+        "result": 0,
+        "recruit": recruit,
+        "playerDataDelta": {"deleted": {}, "modified": {"recruit": recruit, "gacha": user.get("gacha", {})}},
+    }
+
+
+@router.post("/gacha/refreshTags")
+async def gacha_refresh_tags(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    recruit = gacha_service.public_recruit_state(user)
+    slot = recruit["normal"]["slots"].setdefault(str(body.get("slotId") or 0), {})
+    tags = body.get("tags")
+    if not isinstance(tags, list) or not tags:
+        tags = sorted(random.sample(range(1, 30), 5))
+    slot["tags"] = [int(_as_int(value, 0)) for value in tags if _as_int(value, 0)]
+    slot.setdefault("selectTags", [])
+    slot.setdefault("state", 0)
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"recruit": recruit}}}
+
+
+@router.post("/gacha/normalGacha")
+async def gacha_normal(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = gacha_service.start_public_recruit(
+        user,
+        body.get("slotId"),
+        body.get("tags") or body.get("selectTags") or [],
+        body.get("durationInSec") or body.get("duration") or 3600,
+    )
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/gacha/finishNormalGacha")
+async def gacha_finish_normal(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    recruit = gacha_service.public_recruit_state(user)
+    slot_id = str(body.get("slotId") or 0)
+    slot = recruit["normal"]["slots"].setdefault(slot_id, {})
+    if _as_int(slot.get("state"), 0) != 1:
+        return {"result": 1, "error": "recruit not finished"}
+    char_id = random.choice(["char_123_fang", "char_122_beagle", "char_124_kroos", "char_121_lava"])
+    grant_items, delta = grants.apply_items(
+        user, [{"id": char_id, "type": "CHAR", "count": 1}], source="public-recruit"
+    )
+    slot.update({"state": 0, "startTs": -1, "realFinishTs": -1, "maxFinishTs": -1, "selectTags": [], "durationInSec": -1})
+    save_player(account, user)
+    return {
+        "result": 0,
+        "charGet": {"charId": char_id, "itemGet": grant_items},
+        "playerDataDelta": {
+            "deleted": {},
+            "modified": {**delta.get("modified", {}), "recruit": recruit},
+        },
+    }
+
+
+@router.post("/gacha/cancelNormalGacha")
+async def gacha_cancel_normal(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    recruit = gacha_service.public_recruit_state(user)
+    slot = recruit["normal"]["slots"].setdefault(str(body.get("slotId") or 0), {})
+    slot.update({"state": 0, "startTs": -1, "realFinishTs": -1, "maxFinishTs": -1, "selectTags": []})
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"recruit": recruit}}}
+
+
+@router.post("/gacha/boostNormalGacha")
+async def gacha_boost_normal(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    recruit = gacha_service.public_recruit_state(user)
+    slot = recruit["normal"]["slots"].setdefault(str(body.get("slotId") or 0), {})
+    if _as_int(slot.get("state"), 0) != 1:
+        return {"result": 1, "error": "recruit not running"}
+    status = user.setdefault("status", {})
+    tickets = _as_int(status.get("instantFinishTicket"), 0)
+    if tickets <= 0:
+        return {"result": 1, "error": "instant finish ticket not enough"}
+    status["instantFinishTicket"] = tickets - 1
+    slot["state"] = 2
+    slot["realFinishTs"] = now_ts()
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"status": user.get("status", {}), "recruit": recruit}}}
+
+
+@router.post("/gacha/buyRecruitSlot")
+async def gacha_buy_slot():
+    return {"result": 0, **empty_delta()}
+
+
+@router.post("/gacha/getFreeChar")
+async def gacha_get_free_char():
+    return {"result": 0, **empty_delta()}
+
+
+@router.post("/gacha/choosePoolUp")
+async def gacha_choose_pool_up():
+    return {"result": 0, **empty_delta()}
+
+
+async def _shop_buy(request, shop_key):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    result = shop_service.buy_shop_good(
+        user,
+        shop_key,
+        body.get("goodId"),
+        count=body.get("count") or body.get("buyCount") or 1,
+        platform=_shop_platform(account, body),
+    )
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/shop/buyLowGood")
+async def buy_low_good(request: Request):
+    return await _shop_buy(request, "LS")
+
+
+@router.post("/shop/buyHighGood")
+async def buy_high_good(request: Request):
+    return await _shop_buy(request, "HS")
+
+
+@router.post("/shop/buyExtraGood")
+async def buy_extra_good(request: Request):
+    return await _shop_buy(request, "ES")
+
+
+@router.post("/shop/buyClassicGood")
+async def buy_classic_good(request: Request):
+    return await _shop_buy(request, "CLASSIC")
+
+
+@router.post("/shop/buyEPGSGood")
+async def buy_epgs_good(request: Request):
+    return await _shop_buy(request, "EPGS")
+
+
+@router.post("/shop/buySocialGood")
+async def buy_social_good(request: Request):
+    return await _shop_buy(request, "SOCIAL")
+
+
+@router.post("/shop/buyRepGood")
+async def buy_rep_good(request: Request):
+    return await _shop_buy(request, "REP")
+
+
+@router.post("/shop/buyLMTGSGood")
+async def buy_lmtgs_good(request: Request):
+    return await _shop_buy(request, "LMTGS")
+
+
+@router.post("/shop/buySkinGood")
+async def buy_skin_good(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    result = shop_service.buy_skin(user, body.get("goodId"), platform=_shop_platform(account, body))
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/shop/buyFurniGood")
+async def buy_furni_good(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    result = shop_service.buy_furni(
+        user,
+        body.get("goodId"),
+        buy_count=body.get("buyCount") or 1,
+        cost_type=body.get("costType") or "",
+        platform=_shop_platform(account, body),
+    )
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/shop/buyFurniGroup")
+async def buy_furni_group(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    result = shop_service.buy_furni_group(
+        user,
+        body.get("groupId"),
+        body.get("goods") or [],
+        cost_type=body.get("costType") or "",
+        platform=_shop_platform(account, body),
+    )
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/shop/decomposePotentialItem")
+async def decompose_potential_item(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    inventory = user.setdefault("inventory", {})
+    status = user.setdefault("status", {})
+    chars = (user.get("troop") or {}).get("chars") or {}
+    items = []
+    for raw in body.get("charInstIdList") or []:
+        char = chars.get(str(raw))
+        if not isinstance(char, dict):
+            continue
+        char_id = str(char.get("charId") or "")
+        token_id = f"p_{char_id}"
+        count = _as_int(inventory.get(token_id), 0)
+        if count <= 0:
+            continue
+        inventory.pop(token_id, None)
+        rarity = _as_int(str((game_data.character(char_id) or {}).get("rarity") or "TIER_1").replace("TIER_", ""), 1)
+        if rarity >= 5:
+            status["hggShard"] = _as_int(status.get("hggShard"), 0) + count
+            items.append({"id": "4004", "type": "HGG_SHD", "count": count})
+        else:
+            status["lggShard"] = _as_int(status.get("lggShard"), 0) + count
+            items.append({"id": "4005", "type": "LGG_SHD", "count": count})
+    if items:
+        save_player(account, user)
+    return {
+        "result": 0,
+        "items": items,
+        "playerDataDelta": {"deleted": {}, "modified": {"inventory": inventory, "status": status}},
+    }
+
+
+@router.post("/shop/checkForbidden")
+async def shop_check_forbidden():
+    return {"result": 0, "gacha": [], "shop": [], **empty_delta()}
 

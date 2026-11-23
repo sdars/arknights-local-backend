@@ -15,11 +15,14 @@ from ..db import connect, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
 from .. import (
+    battles,
+    gacha_service,
     game_data,
     gift_catalog,
     grants,
     mail_service,
     payments,
+    product_catalog,
     runtime_settings,
     selfcheck,
     vouchers,
@@ -199,6 +202,401 @@ def _mail_instance_rows(limit=100):
         item["style"] = mail_service._json(item.get("style_json"), {})
         result.append(item)
     return result
+
+
+def _format_ts(value):
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    import time as _time
+
+    return _time.strftime("%Y-%m-%dT%H:%M", _time.localtime(value))
+
+
+def _parse_ts(value):
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    import time as _time
+
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return int(_time.mktime(_time.strptime(text, fmt)))
+        except Exception:
+            continue
+    return 0
+
+
+@router.get("/products", response_class=HTMLResponse)
+async def products_page(request: Request, q: str = "", page: int = 1):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    rows = product_catalog.all_products(include_disabled=True)
+    needle = str(q or "").strip().lower()
+    if needle:
+        rows = [
+            row
+            for row in rows
+            if needle
+            in " ".join(
+                str(row.get(key) or "")
+                for key in ("product_id", "appstore_id", "name", "store_id", "desc")
+            ).lower()
+        ]
+    page_size = 80
+    page = max(1, int(page or 1))
+    total = len(rows)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    rows = rows[(page - 1) * page_size : page * page_size]
+    for row in rows:
+        row["price_yuan"] = f"{_int(row.get('price'), 0) / 100:.2f}"
+    return templates.TemplateResponse(
+        request,
+        "products.html",
+        {
+            "admin": admin_name(request),
+            "active": "products",
+            "products": rows,
+            "total": total,
+            "page": page,
+            "pages": pages,
+            "q": q,
+            "message": _take_flash(request),
+        },
+    )
+
+
+@router.post("/products/create")
+async def product_create(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    try:
+        product = product_catalog.save_product(
+            {
+                "product_id": form.get("product_id"),
+                "appstore_id": form.get("appstore_id"),
+                "store_id": form.get("store_id"),
+                "name": form.get("name"),
+                "desc": form.get("desc"),
+                "price": form.get("price"),
+                "platform": form.get("platform"),
+                "status": form.get("status") or "1",
+            }
+        )
+        _flash(request, f"已创建商品 {product['product_id']}")
+    except ValueError as exc:
+        _flash(request, str(exc))
+    return RedirectResponse("/admin/products", status_code=303)
+
+
+@router.get("/products/{product_id}", response_class=HTMLResponse)
+async def product_edit_page(product_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    product = product_catalog.find_product(good_id=product_id, include_disabled=True)
+    if not product:
+        _flash(request, "商品不存在")
+        return RedirectResponse("/admin/products", status_code=303)
+    items = product.get("grant_items")
+    if not isinstance(items, list) or not items:
+        source = str(product.get("grant_good_id") or "")
+        items = payments.good_items(source) if source else []
+    initial = []
+    catalog = game_data.resource_catalog()
+    for item in items or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        meta = catalog.get(str(item.get("id"))) or {}
+        initial.append(
+            {
+                "id": str(item.get("id")),
+                "type": str(item.get("type") or meta.get("type") or "MATERIAL"),
+                "count": _int(item.get("count"), 1),
+                "name": meta.get("name") or str(item.get("id")),
+            }
+        )
+    return templates.TemplateResponse(
+        request,
+        "product_edit.html",
+        {
+            "admin": admin_name(request),
+            "active": "products",
+            "product": product,
+            "grant_items": initial,
+            "message": _take_flash(request),
+        },
+    )
+
+
+@router.post("/products/{product_id}/content")
+async def product_content_update(product_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    product = product_catalog.find_product(good_id=product_id, include_disabled=True)
+    if not product:
+        _flash(request, "商品不存在")
+        return RedirectResponse("/admin/products", status_code=303)
+    form = await request.form()
+    catalog = game_data.resource_catalog()
+    ids = [str(value).strip() for value in form.getlist("item_id") if str(value).strip()]
+    counts = [str(value) for value in form.getlist("item_count")]
+    items = []
+    try:
+        for index, item_id in enumerate(ids):
+            meta = catalog.get(item_id)
+            if not meta:
+                raise ValueError(f"不存在的资源 ID：{item_id}")
+            count = _int(counts[index] if index < len(counts) else 1, 0)
+            if count <= 0 or count > 999999:
+                raise ValueError(f"资源数量必须在 1-999999 之间：{item_id}")
+            items.append({"id": item_id, "type": meta["type"], "count": count})
+        values = dict(product)
+        values["grant_items"] = items
+        if items:
+            values["grant_good_id"] = ""
+        product_catalog.save_product(values, original_id=product_id)
+        _flash(request, f"商品 {product_id} 内容已保存（{len(items)} 种）")
+    except ValueError as exc:
+        _flash(request, str(exc))
+    return RedirectResponse(f"/admin/products/{product_id}", status_code=303)
+
+
+@router.post("/products/{product_id}/update")
+async def product_update(product_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    try:
+        product = product_catalog.save_product(
+            {
+                "product_id": product_id,
+                "appstore_id": form.get("appstore_id"),
+                "store_id": form.get("store_id"),
+                "name": form.get("name"),
+                "desc": form.get("desc"),
+                "price": form.get("price"),
+                "platform": form.get("platform"),
+                "status": form.get("status") or "0",
+            },
+            original_id=product_id,
+        )
+        _flash(request, f"已保存商品 {product['product_id']}")
+    except ValueError as exc:
+        _flash(request, str(exc))
+    return RedirectResponse("/admin/products", status_code=303)
+
+
+@router.post("/products/{product_id}/status")
+async def product_status(product_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    product_catalog.set_status(product_id, str(form.get("status")) == "1")
+    _flash(request, f"商品 {product_id} 状态已更新")
+    return RedirectResponse("/admin/products", status_code=303)
+
+
+@router.post("/products/{product_id}/delete")
+async def product_delete(product_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    product_catalog.delete_product(product_id)
+    _flash(request, f"已下架商品 {product_id}")
+    return RedirectResponse("/admin/products", status_code=303)
+
+
+def _gacha_rows(q="", status=""):
+    rows = gacha_service.all_pools()
+    now = int(__import__("time").time())
+    needle = str(q or "").strip().lower()
+    result = []
+    for row in rows:
+        pool_id = str(row.get("gachaPoolId") or "")
+        name = str(row.get("gachaPoolName") or pool_id)
+        if needle and needle not in f"{pool_id} {name}".lower():
+            continue
+        start = _int(row.get("openTime"), 0)
+        end = _int(row.get("endTime"), 0)
+        active = bool(row.get("enabled", True)) and (start <= now if start else True) and (end >= now if end else True)
+        if status == "active" and not active:
+            continue
+        if status == "disabled" and row.get("enabled", True):
+            continue
+        result.append(
+            {
+                **row,
+                "pool_id": pool_id,
+                "name": name,
+                "open_text": _format_ts(start),
+                "end_text": _format_ts(end),
+                "is_active": active,
+                "rate6": _float(row.get("rate6"), row.get("rate6") if row.get("rate6") is not None else ""),
+            }
+        )
+    result.sort(key=lambda row: (not row["is_active"], row.get("open_text") or "", row["pool_id"]), reverse=True)
+    return result
+
+
+def _float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@router.get("/gacha", response_class=HTMLResponse)
+async def gacha_page(request: Request, q: str = "", status: str = "", page: int = 1):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    rows = _gacha_rows(q=q, status=status)
+    page_size = 80
+    page = max(1, int(page or 1))
+    total = len(rows)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    rows = rows[(page - 1) * page_size : page * page_size]
+    return templates.TemplateResponse(
+        request,
+        "gacha.html",
+        {
+            "admin": admin_name(request),
+            "active": "gacha",
+            "pools": rows,
+            "total": total,
+            "page": page,
+            "pages": pages,
+            "q": q,
+            "status_filter": status,
+            "message": _take_flash(request),
+        },
+    )
+
+
+def _gacha_edit_context(pool_id):
+    meta = gacha_service.pool_meta(pool_id)
+    if not meta:
+        return None
+    detail = gacha_service.pool_detail(pool_id) or {}
+    info = detail.get("detailInfo") or {}
+    avail = ((info.get("availCharInfo") or {}).get("perAvailList")) or []
+    rates = {5: 0.02, 4: 0.08, 3: 0.5, 2: 0.4}
+    for row in avail:
+        rates[_int(row.get("rarityRank"), 0)] = _float(row.get("totalPercent"), 0)
+    up_chars = []
+    for row in ((info.get("upCharInfo") or {}).get("perCharList") or []):
+        if _int(row.get("rarityRank"), 0) == 5:
+            up_chars = [str(value) for value in row.get("charIdList") or []]
+    meta["open_text"] = _format_ts(meta.get("openTime"))
+    meta["end_text"] = _format_ts(meta.get("endTime"))
+    meta["rate6_percent"] = round(rates.get(5, 0.02) * 100, 3)
+    meta["rate5_percent"] = round(rates.get(4, 0.08) * 100, 3)
+    meta["rate4_percent"] = round(rates.get(3, 0.5) * 100, 3)
+    meta["rate3_percent"] = round(rates.get(2, 0.4) * 100, 3)
+    meta["up_chars_text"] = ",".join(up_chars)
+    return meta
+
+
+@router.get("/gacha/{pool_id}", response_class=HTMLResponse)
+async def gacha_edit_page(pool_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    meta = _gacha_edit_context(pool_id)
+    if not meta:
+        _flash(request, "卡池不存在")
+        return RedirectResponse("/admin/gacha", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "gacha_edit.html",
+        {
+            "admin": admin_name(request),
+            "active": "gacha",
+            "pool": meta,
+            "message": _take_flash(request),
+        },
+    )
+
+
+def _gacha_form_values(form, pool_id):
+    values = {
+        "gachaPoolName": str(form.get("name") or pool_id),
+        "enabled": str(form.get("enabled") or "1") == "1",
+        "openTime": _parse_ts(form.get("open_time")),
+        "endTime": _parse_ts(form.get("end_time")),
+        "singlePrice": max(0, _int(form.get("single_price"), 600)),
+        "tenPrice": max(0, _int(form.get("ten_price"), 6000)),
+        "upChars": [value.strip() for value in str(form.get("up_chars") or "").replace("\n", ",").split(",") if value.strip()],
+        "upRate": max(0.0, min(1.0, _float(form.get("up_rate_percent"), 50.0) / 100.0)),
+        "rate6": max(0.0, _float(form.get("rate6_percent"), 2.0) / 100.0),
+        "rate5": max(0.0, _float(form.get("rate5_percent"), 8.0) / 100.0),
+        "rate4": max(0.0, _float(form.get("rate4_percent"), 50.0) / 100.0),
+        "rate3": max(0.0, _float(form.get("rate3_percent"), 40.0) / 100.0),
+        "guarantee5Avail": 1 if str(form.get("guarantee5")) == "1" else 0,
+        "guarantee5Count": max(1, _int(form.get("guarantee5_count"), 10)),
+        "basePool": str(form.get("base_pool") or "").strip(),
+    }
+    rate_total = values["rate6"] + values["rate5"] + values["rate4"] + values["rate3"]
+    if abs(rate_total - 1.0) > 0.0001:
+        raise ValueError(f"四项概率合计必须为 100%，当前为 {rate_total * 100:.3f}%")
+    return values
+
+
+@router.post("/gacha/create")
+async def gacha_create(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    pool_id = str(form.get("pool_id") or "").strip()
+    try:
+        base = str(form.get("base_pool") or "").strip()
+        if base and not gacha_service.pool_meta(base):
+            raise ValueError(f"基础卡池不存在：{base}")
+        values = _gacha_form_values(form, pool_id)
+        gacha_service.save_pool(pool_id, values, create=True)
+        _flash(request, f"已上线新卡池 {pool_id}")
+        return RedirectResponse(f"/admin/gacha/{pool_id}", status_code=303)
+    except ValueError as exc:
+        _flash(request, str(exc))
+        return RedirectResponse("/admin/gacha", status_code=303)
+
+
+@router.post("/gacha/{pool_id}/update")
+async def gacha_update(pool_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    try:
+        values = _gacha_form_values(form, pool_id)
+        gacha_service.save_pool(pool_id, values)
+        _flash(request, f"卡池 {pool_id} 已保存")
+    except ValueError as exc:
+        _flash(request, str(exc))
+    return RedirectResponse(f"/admin/gacha/{pool_id}", status_code=303)
+
+
+@router.post("/gacha/{pool_id}/delete")
+async def gacha_delete(pool_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    gacha_service.delete_pool(pool_id)
+    _flash(request, f"卡池 {pool_id} 已下架")
+    return RedirectResponse("/admin/gacha", status_code=303)
 
 
 def _mail_form_values(form):
@@ -682,6 +1080,12 @@ async def account_status_update(request: Request, uid: int):
         status["nickName"] = str(form.get("nickName")).strip()
         with connect() as conn:
             conn.execute("UPDATE accounts SET nickname=? WHERE uid=?", (status["nickName"], uid))
+    if "mainStageProgress" in form and str(form.get("mainStageProgress") or "").strip():
+        sync = battles.sync_mainline_progress(user, str(form.get("mainStageProgress")).strip())
+        if sync.get("result") == 0:
+            _flash(request, f"主线进度已同步到 {sync.get('stageId')}，{sync.get('marked')} 个关卡标记为通关")
+        else:
+            _flash(request, sync.get("error") or "主线进度同步失败")
     _save_user(uid, user)
     return RedirectResponse(f"/admin/accounts/{uid}", status_code=303)
 
@@ -1037,7 +1441,7 @@ async def orders_page(
             "active": "orders",
             "orders": rows,
             "accounts": accounts,
-            "products": sorted(payments.products(), key=lambda item: (item.get("name") or "", item.get("product_id") or "")),
+            "products": sorted(product_catalog.active_products(), key=lambda item: (item.get("name") or "", item.get("product_id") or "")),
             "q": q,
             "status_filter": status,
             "platform_filter": platform,
@@ -1166,7 +1570,7 @@ async def vouchers_page(request: Request):
             "active": "vouchers",
             "vouchers": voucher_rows,
             "accounts": accounts,
-            "products": sorted(payments.products(), key=lambda item: (item.get("name") or "", item.get("product_id") or "")),
+            "products": sorted(product_catalog.active_products(), key=lambda item: (item.get("name") or "", item.get("product_id") or "")),
             "message": _take_flash(request),
         },
     )

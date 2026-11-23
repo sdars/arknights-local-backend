@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from .config import APP_CODE, BASE_DIR
 from .db import connect, now_ts
 from .grants import apply_items, empty_delta, merge_delta, normalize_platform
-from . import gift_catalog, grants, monthly_card, vouchers
+from . import gift_catalog, grants, monthly_card, product_catalog, vouchers
 
 
 PRODUCT_PATH = BASE_DIR / "fixtures" / "product_list.json"
@@ -26,23 +26,11 @@ def order_platform(value):
 
 
 def products():
-    global _products
-    with _lock:
-        if _products is None:
-            payload = json.loads(Path(PRODUCT_PATH).read_text(encoding="utf-8"))
-            _products = payload.get("productList", [])
-        return _products
+    return product_catalog.all_products(include_disabled=True)
 
 
 def find_product(store_id=None, good_id=None):
-    for item in products():
-        if store_id is not None and int(item.get("store_id", -1)) == int(store_id):
-            return item
-    if good_id:
-        for item in products():
-            if item.get("product_id") == good_id or item.get("appstore_id") == good_id:
-                return item
-    return products()[0] if products() else None
+    return product_catalog.find_product(store_id=store_id, good_id=good_id, include_disabled=False)
 
 
 def shop_goods():
@@ -136,7 +124,7 @@ def cash_good_item(good_id, first_purchase=False):
     return {"id": "4002", "type": "DIAMOND", "count": amount}
 
 
-def good_items(good_id):
+def _catalog_good_items(good_id):
     if is_cash_good(good_id):
         item = cash_good_item(good_id, first_purchase=False)
         return [item] if item else []
@@ -147,6 +135,19 @@ def good_items(good_id):
     if good_id.startswith("GP_"):
         return gift_catalog.items(good_id)
     return []
+
+
+def good_items(good_id):
+    good_id = str(good_id or "")
+    product = product_catalog.find_product(good_id=good_id, include_disabled=True)
+    if product:
+        items = product.get("grant_items")
+        if isinstance(items, list) and items:
+            return list(items)
+        source = str(product.get("grant_good_id") or "")
+        if source and source != good_id:
+            return _catalog_good_items(source)
+    return _catalog_good_items(good_id)
 
 
 def _first_cash_purchase(conn, order):

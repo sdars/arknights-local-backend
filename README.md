@@ -31,11 +31,13 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 游戏登录：`/account/login`、`/account/syncData`、`/account/syncStatus`、`/account/syncPushMessage`
 - 战斗：`/quest/battleStart`、`/quest/battleFinish`
 - 签到：`/user/checkIn` 与累计签到 `/openServerV3/getCheckInReward`；累计签到按 `open_server_table.json` 发奖，写 `checkIn.history` 的 0/1 领取状态，重复请求不重复发放，并兼容 `/activity/getOpenServerCheckInReward`
-- 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店
+- 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店；已实现资质/高级/采购凭证/中坚/EPGS/信用/家具/皮肤购买，限购次数按“剩余可购买数”写入 `shop.*.info` 并通过 `syncStatus` 模块 16 回传
+- 寻访：`/gacha/getPoolDetail`、`/gacha/advancedGacha`、`/gacha/tenAdvancedGacha`、公开招募同步；支持卡池概率、UP、价格、保底、开放时间、新卡池与干员入库
+- 干员：`/charBuild/upgradeChar`、`evolveChar`、`upgradeSkill`、潜能、技能、装备、皮肤与语音；在线 `syncStatus` / `syncPushMessage` 会回传后台修改后的完整状态
 - 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号；源石商品按 `CashGoodList.json` 的 `doubleCount` / `diamondNum + plusNum` 发放，旧 `CS_*_r3~r6` 商品 ID 映射到当前档位；月卡激活 30 天订阅并发放当日每日奖励；所有订单用 `granted_items_json` 防止重复
 - 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
 - 邮件：模板中心、单账号/多 UID/全服发送、有效期与附件、邮件箱、单封/批量领取、防重复发奖、已读删除；`pushFlags.hasGifts` 与邮箱同步
-- Web UI：仪表盘、账号列表搜索、用户控制台（资料、货币、体力、主线进度、库存、皮肤、头像、干员、编队、订单、邮件、Token、JSON 导出）、邮件中心、请求日志、服务与更新设置
+- Web UI：仪表盘、账号列表搜索、用户控制台（资料、货币、体力、主线进度、库存、皮肤、头像、干员、编队、订单、邮件、Token、JSON 导出）、商品管理（新增/改价/上下架/发放内容）、寻访管理（概率/UP/价格/保底/新卡池）、订单管理、代金券、邮件中心、请求日志、服务与更新设置
 
 ## 开发模式
 

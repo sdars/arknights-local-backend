@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% set active = 'gacha' %}
+{% block title %}{{ pool.gachaPoolName }} · 寻访配置{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">GACHA POOL</p>
+    <h1>{{ pool.gachaPoolName }}</h1>
+    <p class="muted mono">{{ pool.gachaPoolId }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/admin/gacha">返回卡池</a>
+    <form method="post" action="/admin/gacha/{{ pool.gachaPoolId }}/delete" onsubmit="return confirm('确定下架该卡池？')"><button class="danger" type="submit">下架</button></form>
+  </div>
+</header>
+
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>基础属性</h2><span class="muted">保存后立即影响 /gacha/getPoolDetail 与抽卡结算</span></div>
+  <form class="form-grid" method="post" action="/admin/gacha/{{ pool.gachaPoolId }}/update">
+    <label>名称<input name="name" value="{{ pool.gachaPoolName }}" required></label>
+    <label>状态
+      <select name="enabled">
+        <option value="1" {% if pool.get('enabled', True) %}selected{% endif %}>开放</option>
+        <option value="0" {% if not pool.get('enabled', True) %}selected{% endif %}>关闭</option>
+      </select>
+    </label>
+    <label>开放时间<input type="datetime-local" name="open_time" value="{{ pool.open_text }}"></label>
+    <label>结束时间<input type="datetime-local" name="end_time" value="{{ pool.end_text }}"></label>
+    <label>单抽价格（合成玉）<input type="number" name="single_price" value="{{ pool.get('singlePrice', 600) }}" min="0"></label>
+    <label>十连价格（合成玉）<input type="number" name="ten_price" value="{{ pool.get('tenPrice', 6000) }}" min="0"></label>
+    <label>复制基础卡池<input class="mono" name="base_pool" value="{{ pool.get('basePool') or '' }}" placeholder="仅自定义卡池需要"></label>
+    <label>保底 5★
+      <select name="guarantee5">
+        <option value="1" {% if pool.get('guarantee5Avail') %}selected{% endif %}>十连保底</option>
+        <option value="0" {% if not pool.get('guarantee5Avail') %}selected{% endif %}>不保底</option>
+      </select>
+    </label>
+    <label>保底次数<input type="number" name="guarantee5_count" value="{{ pool.get('guarantee5Count', 10) }}" min="1"></label>
+    <div class="span-all"><p class="muted small-note">概率单位是百分比，四项合计应为 100。6★ 概率会按累计保底自动提升。</p></div>
+    <label>6★ 概率 %<input type="number" step="0.001" name="rate6_percent" value="{{ pool.rate6_percent }}" min="0"></label>
+    <label>5★ 概率 %<input type="number" step="0.001" name="rate5_percent" value="{{ pool.rate5_percent }}" min="0"></label>
+    <label>4★ 概率 %<input type="number" step="0.001" name="rate4_percent" value="{{ pool.rate4_percent }}" min="0"></label>
+    <label>3★ 概率 %<input type="number" step="0.001" name="rate3_percent" value="{{ pool.rate3_percent }}" min="0"></label>
+    <label>UP 干员 ID（逗号分隔）<input class="mono span-all" name="up_chars" value="{{ pool.up_chars_text }}" placeholder="char_103_angel,char_112_siege"></label>
+    <label>UP 占 6★ 比例 %<input type="number" step="0.1" name="up_rate_percent" value="{{ (pool.get('upRate', 0.5) * 100)|round(1) }}" min="0" max="100"></label>
+    <div class="actions span-all"><button class="primary" type="submit">保存卡池配置</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>协议自检</h2><span class="muted">以下为当前服务端将返回的卡池概率与 UP 干员</span></div>
+  <div class="table-wrap">
+    <table class="table compact-table">
+      <thead><tr><th>稀有度</th><th>概率</th><th>可选干员数</th></tr></thead>
+      <tbody>
+        <tr><td>6★</td><td>{{ pool.rate6_percent }}%</td><td class="mono">-</td></tr>
+        <tr><td>5★</td><td>{{ pool.rate5_percent }}%</td><td class="mono">-</td></tr>
+        <tr><td>4★</td><td>{{ pool.rate4_percent }}%</td><td class="mono">-</td></tr>
+        <tr><td>3★</td><td>{{ pool.rate3_percent }}%</td><td class="mono">-</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

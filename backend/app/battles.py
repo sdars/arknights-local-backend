@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import threading
 import time
 
@@ -71,7 +72,7 @@ def decrypt_battle_data(encoded, login_time):
 def record_battle_start(account_id, battle_id, stage_id):
     with connect() as conn:
         conn.execute(
-            "INSERT INTO battle_sessions(battle_id,account_id,stage_id,started_at,finished_at) VALUES(?,?,?,?,NULL)",
+            "INSERT OR REPLACE INTO battle_sessions(battle_id,account_id,stage_id,started_at,finished_at) VALUES(?,?,?,?,NULL)",
             (battle_id, account_id, stage_id, now_ts()),
         )
 
@@ -169,22 +170,23 @@ def finish_battle(account, body):
         push_flags = user.get("pushFlags") or {}
         decrypted = decrypt_battle_data(body.get("data"), push_flags.get("status", ""))
         decode = decrypted or {}
-        battle_id = str(
-            decode.get("battleId")
-            or body.get("battleId")
-            or body.get("stageId")
-            or ""
-        )
+        battle_id = str(decode.get("battleId") or body.get("battleId") or body.get("stageId") or "")
         session = _battle_session(fresh["id"], battle_id or None)
-        stage_id = str(
-            decode.get("battleId")
-            or body.get("stageId")
-            or (session or {}).get("stage_id")
-            or body.get("battleId")
-            or ""
-        )
-        if not stage_id and session:
-            stage_id = str(session.get("stage_id") or "")
+        candidates = [
+            decode.get("stageId"),
+            decode.get("battleId"),
+            body.get("stageId"),
+            (session or {}).get("stage_id"),
+            body.get("battleId"),
+        ]
+        stage_id = ""
+        for candidate in candidates:
+            text = str(candidate or "")
+            if text and game_data.stage(text):
+                stage_id = text
+                break
+        if not stage_id:
+            stage_id = str((session or {}).get("stage_id") or decode.get("battleId") or body.get("battleId") or "")
         stage_cfg = game_data.stage(stage_id) if stage_id else None
         if not stage_cfg:
             _close_battle((session or {}).get("battle_id"))
@@ -263,3 +265,110 @@ def finish_battle(account, body):
         save_player(fresh, user)
         _close_battle((session or {}).get("battle_id") or battle_id or None)
         return response
+
+
+def _main_code(stage_id):
+    entry = game_data.stage(stage_id) or {}
+    code = str(entry.get("code") or "")
+    match = re.match(r"^(\d+)-(\d+)$", code)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def main_stage_sequence():
+    stages = (game_data.stage_table() or {}).get("stages") or {}
+    rows = []
+    for stage_id, entry in stages.items():
+        if not isinstance(entry, dict) or entry.get("stageType") != "MAIN":
+            continue
+        code = _main_code(stage_id)
+        if code:
+            rows.append((code, str(stage_id)))
+    rows.sort()
+    return [stage_id for _, stage_id in rows]
+
+
+def normalize_main_stage(target):
+    text = str(target or "").strip()
+    if not text:
+        return ""
+    if text.startswith("main_"):
+        return text if game_data.stage(text) else ""
+    match = re.match(r"^(\d+)-(\d+)$", text)
+    if not match:
+        return ""
+    chapter = int(match.group(1))
+    index = int(match.group(2))
+    candidate = f"main_{chapter:02d}-{index:02d}"
+    return candidate if game_data.stage(candidate) else ""
+
+
+def _stage_node(stages, stage_id):
+    node = stages.get(stage_id)
+    if not isinstance(node, dict):
+        node = {
+            "hasBattleReplay": 0,
+            "practiceTimes": 0,
+            "state": 0,
+            "completeTimes": 0,
+            "stageId": stage_id,
+            "startTimes": 0,
+        }
+        stages[stage_id] = node
+    return node
+
+
+def sync_mainline_progress(user, target):
+    stage_id = normalize_main_stage(target)
+    if not stage_id:
+        return {"result": 1, "error": f"未知主线关卡：{target}"}
+    sequence = main_stage_sequence()
+    if stage_id not in sequence:
+        return {"result": 1, "error": f"该关卡不在主线序列中：{stage_id}"}
+    end = sequence.index(stage_id) + 1
+    wanted = sequence[:end]
+    dungeon = user.setdefault("dungeon", {})
+    stages = dungeon.setdefault("stages", {})
+    target_entry = game_data.stage(stage_id) or {}
+    target_zone = str(target_entry.get("zoneId") or "")
+    try:
+        target_chapter = int(stage_id.split("_", 1)[1].split("-", 1)[0])
+    except Exception:
+        target_chapter = 0
+    tables = (game_data.stage_table() or {}).get("stages") or {}
+    training = []
+    for candidate_id, entry in tables.items():
+        if not isinstance(entry, dict) or entry.get("stageType") != "MAIN":
+            continue
+        code = str(entry.get("code") or "")
+        if not code.startswith("TR-"):
+            continue
+        zone = str(entry.get("zoneId") or "")
+        zone_match = re.match(r"main_(\d+)$", zone)
+        zone_chapter = int(zone_match.group(1)) if zone_match else -1
+        if target_zone and (zone == target_zone or (0 <= zone_chapter <= target_chapter)):
+            training.append(str(candidate_id))
+    marked = 0
+    for current in wanted + sorted(training):
+        node = _stage_node(stages, current)
+        node["stageId"] = current
+        node["state"] = 3
+        node["completeTimes"] = max(1, int(node.get("completeTimes", 0) or 0))
+        node["startTimes"] = max(1, int(node.get("startTimes", 0) or 0))
+        marked += 1
+    status = user.setdefault("status", {})
+    status["mainStageProgress"] = stage_id
+    next_stage = sequence[end] if end < len(sequence) else ""
+    if next_stage:
+        _stage_node(stages, next_stage)
+    return {
+        "result": 0,
+        "stageId": stage_id,
+        "nextStage": next_stage,
+        "marked": marked,
+        "playerDataDelta": {
+            "deleted": {},
+            "modified": {"dungeon": dungeon, "status": status},
+        },
+    }

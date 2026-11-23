@@ -30,7 +30,9 @@ def test_sync_status_returns_result_object(client, login):
     body = response.json()
     assert isinstance(body["result"], dict)
     assert isinstance(body["ts"], int)
-    assert body["playerDataDelta"] == {"deleted": {}, "modified": {}}
+    assert body["playerDataDelta"]["deleted"] == {}
+    assert "status" in body["playerDataDelta"]["modified"]
+    assert "troop" in body["playerDataDelta"]["modified"]
 
 
 def test_cash_good_list_has_goods(client, login):
@@ -98,7 +100,9 @@ def test_buy_free_level_pack_and_purchase_state(client, login):
         json={"goodIdMap": {"GP": ["GP_freeL_5"]}},
         timeout=15,
     ).json()
-    assert state["result"]["GP_freeL_5"] == 1
+    # getGoodPurchaseState returns remaining stock, so a limit-1 item that was
+    # just bought is omitted (the client treats a missing key as sold out).
+    assert state["result"].get("GP_freeL_5", 0) == 0
     duplicate = client.post(
         f"{client.base_url}/shop/buyGPGood",
         headers=login["headers"],

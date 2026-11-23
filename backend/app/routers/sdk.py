@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ..config import APP_CODE, CLIENT_VERSION, RES_VERSION
 from ..services import account_by_phone, account_by_token, create_account
-from .. import payments
+from .. import payments, product_catalog
 
 router = APIRouter()
 
@@ -169,10 +169,7 @@ async def u8_get_token(request: Request):
 
 @router.post("/u8/pay/getAllProductList")
 async def product_list():
-    path = Path(__file__).resolve().parents[2] / "fixtures" / "product_list.json"
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {"productList": []}
+    return {"productList": product_catalog.active_products()}
 
 
 @router.post("/user/pay/order/v2/create/app_product")
