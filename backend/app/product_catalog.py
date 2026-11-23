@@ -66,6 +66,9 @@ def _save_overrides(payload):
     OVERRIDE_PATH.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    stamp = _mtime(OVERRIDE_PATH)
+    with _lock:
+        _cache["overrides"] = (stamp, copy.deepcopy(payload))
 
 
 def all_products(include_disabled=True):
@@ -213,6 +216,15 @@ def delete_product(product_id):
     overrides = _load_overrides()
     products = overrides.setdefault("products", {})
     product_id = str(product_id or "")
+    base_ids = {
+        str(item.get("product_id") or "")
+        for item in (_load_base().get("productList") or [])
+        if isinstance(item, dict) and item.get("product_id")
+    }
+    if product_id not in base_ids:
+        products.pop(product_id, None)
+        _save_overrides(overrides)
+        return True
     existing = find_product(good_id=product_id, include_disabled=True) or products.get(product_id)
     if isinstance(existing, dict):
         existing = dict(existing)

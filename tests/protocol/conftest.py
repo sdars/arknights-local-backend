@@ -65,6 +65,7 @@ def test_account(client):
             ]
             for account_id in ids:
                 conn.execute("DELETE FROM battle_sessions WHERE account_id=?", (account_id,))
+                conn.execute("DELETE FROM battle_records WHERE account_id=?", (account_id,))
                 conn.execute("DELETE FROM orders WHERE account_id=?", (account_id,))
                 conn.execute("DELETE FROM sessions WHERE account_id=?", (account_id,))
                 tables = {

@@ -249,7 +249,7 @@ async def battle_start(request: Request):
         stages_user[stage] = stage_node
     stage_node["startTimes"] = int(stage_node.get("startTimes", 0) or 0) + 1
     save_player(account, user)
-    battles.record_battle_start(account["id"], battle_id, stage)
+    battles.record_battle_start(account["id"], battle_id, stage, payload=body)
     stages = modified.setdefault("dungeon", {}).setdefault("stages", {})
     stages[stage] = stage_node
     return template
@@ -262,6 +262,29 @@ async def battle_finish(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     return battles.finish_battle(account, body)
+
+
+@router.post("/quest/saveBattleReplay")
+async def save_battle_replay(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    result = battles.save_battle_replay(user, body.get("battleReplay"))
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/quest/getBattleReplay")
+async def get_battle_replay(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    return battles.load_battle_replay(user, body.get("stageId"))
 
 
 @router.post("/mission/confirmMission")

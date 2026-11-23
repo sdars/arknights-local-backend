@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% set active = 'battles' %}
+{% block title %}对局记录 · Arknights 本机后端{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">BATTLE RECORDS</p><h1>对局记录</h1></div>
+  <span class="muted">客户端上报的 battleStart / battleFinish 与回放数据</span>
+</header>
+<section class="panel">
+  <form class="inline-form" method="get" action="/admin/battles">
+    <label>UID<input name="uid" value="{{ uid }}" placeholder="例如 10000000"></label>
+    <label>关卡<input name="stage" value="{{ stage }}" placeholder="0-10 / main_00-10"></label>
+    <label>条数<input name="limit" type="number" value="{{ limit }}" min="1" max="1000"></label>
+    <button class="primary">筛选</button>
+  </form>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>最近对局</h2><span class="muted">{{ records|length }} 条</span></div>
+  <table class="table">
+    <thead><tr><th>ID</th><th>开始</th><th>UID</th><th>关卡</th><th>结果</th><th>评价</th><th>击杀</th><th>耗时</th></tr></thead>
+    <tbody>
+    {% for row in records %}
+      <tr>
+        <td class="mono">#{{ row.id }}</td>
+        <td class="mono">{{ row.start_text }}</td>
+        <td class="mono">{{ row.uid }}</td>
+        <td><span class="mono">{{ row.stage_id }}</span>{% if row.stage_code %}<span class="muted"> · {{ row.stage_code }}</span>{% endif %}</td>
+        <td><span class="status s{{ 2 if row.result == 'win' else 4 }}">{{ '胜利' if row.result == 'win' else '失败' }}</span></td>
+        <td>{{ row.complete_state }} 星</td>
+        <td>{{ row.kill_count }}</td>
+        <td>{% if row.started_at and row.finished_at %}{{ row.finished_at - row.started_at }}s{% else %}-{% endif %}</td>
+      </tr>
+      <tr>
+        <td colspan="8">
+          <details>
+            <summary class="muted">查看上报数据 #{{ row.id }}</summary>
+            <pre class="mono" style="white-space:pre-wrap;max-height:420px;overflow:auto">{{ row.payload_pretty }}</pre>
+            {% if row.raw_pretty and row.raw_pretty != '{}' %}
+            <details><summary class="muted">完整 battleFinish 请求体</summary><pre class="mono" style="white-space:pre-wrap;max-height:320px;overflow:auto">{{ row.raw_pretty }}</pre></details>
+            {% endif %}
+          </details>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">暂无对局记录</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

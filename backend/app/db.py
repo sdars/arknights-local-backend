@@ -103,8 +103,29 @@ def init_db():
                 account_id INTEGER NOT NULL,
                 stage_id TEXT NOT NULL,
                 started_at INTEGER NOT NULL,
-                finished_at INTEGER
+                finished_at INTEGER,
+                payload_json TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS battle_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                uid INTEGER NOT NULL,
+                battle_id TEXT,
+                stage_id TEXT NOT NULL,
+                stage_code TEXT,
+                complete_state INTEGER NOT NULL DEFAULT 0,
+                result TEXT NOT NULL DEFAULT '',
+                kill_count INTEGER NOT NULL DEFAULT 0,
+                started_at INTEGER,
+                finished_at INTEGER,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                raw_data TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_battle_records_uid
+                ON battle_records(uid, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_battle_records_stage
+                ON battle_records(stage_id, created_at DESC);
             CREATE TABLE IF NOT EXISTS mail_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
@@ -143,6 +164,9 @@ def init_db():
             """
         )
         order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+        session_columns = {row["name"] for row in conn.execute("PRAGMA table_info(battle_sessions)")}
+        if "payload_json" not in session_columns:
+            conn.execute("ALTER TABLE battle_sessions ADD COLUMN payload_json TEXT NOT NULL DEFAULT ''")
         if "granted" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
         if "granted_at" not in order_columns:

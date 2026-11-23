@@ -303,7 +303,7 @@ def test_admin_mainline_sync_marks_early_stages_passed(client, login, test_accou
     admin_login(client)
     response = client.post(
         f"{client.base_url}/admin/accounts/{uid}/status",
-        data={"mainStageProgress": "0-10"},
+        data={"mainlineTarget": "0-10"},
         allow_redirects=False,
         timeout=20,
     )
@@ -311,7 +311,8 @@ def test_admin_mainline_sync_marks_early_stages_passed(client, login, test_accou
     synced = client.post(
         f"{client.base_url}/account/syncData", headers=login["headers"], json={}, timeout=20
     ).json()["user"]
-    assert synced["status"]["mainStageProgress"] == "main_00-10"
+    assert synced["status"]["mainStageProgress"] == "main_00-11"
+    assert synced["dungeon"]["stages"]["main_00-11"]["state"] == 0
     assert synced["dungeon"]["stages"]["main_00-01"]["state"] == 3
     assert synced["dungeon"]["stages"]["main_00-01"]["completeTimes"] >= 1
     assert synced["dungeon"]["stages"]["main_00-10"]["state"] == 3

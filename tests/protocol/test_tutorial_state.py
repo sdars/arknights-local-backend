@@ -68,3 +68,64 @@ def test_0_11_skips_building_chain_without_leaving_progress_behind():
     ):
         assert flags.get(story_id) == 1, story_id
     assert user["status"]["progress"] == 10100
+
+
+def test_terminal_pointer_targets_the_next_mainline_stage():
+    user = copy.deepcopy(_template())
+    result = battles.sync_mainline_progress(user, "main_00-10")
+    assert result["result"] == 0
+    assert result["nextStage"] == "main_00-11"
+    assert user["status"]["mainStageProgress"] == "main_00-11"
+    assert user["dungeon"]["stages"]["main_00-11"]["state"] == 0
+
+    result = battles.sync_mainline_progress(user, "main_00-11")
+    assert result["nextStage"] == "main_01-01"
+    assert user["status"]["mainStageProgress"] == "main_01-01"
+
+
+def test_mainline_sequence_covers_every_episode_without_variant_duplicates():
+    sequence = battles.main_stage_sequence()
+    assert len(sequence) == len(set(sequence))
+    assert sequence[0] == "main_00-01"
+    assert "main_00-11" in sequence
+    assert sequence.index("main_00-11") == sequence.index("main_00-10") + 1
+    assert sequence.index("main_01-01") == sequence.index("main_00-11") + 1
+    assert "main_08-01" in sequence
+    assert "st_08-06" in sequence
+    assert sequence.index("main_08-01") < sequence.index("st_08-06") < sequence.index("main_09-01")
+    assert any(stage.startswith("main_17-") for stage in sequence)
+
+
+def test_repair_uses_previous_stage_for_terminal_pointer():
+    assert battles.mainline_cleared_target("main_00-01") == ""
+    assert battles.mainline_cleared_target("main_00-11") == "main_00-10"
+    assert battles.mainline_cleared_target("main_01-01") == "main_00-11"
+    assert battles.mainline_cleared_target("not-a-stage") == ""
+
+
+def test_mainline_overview_explains_chapter_and_stage_totals():
+    user = copy.deepcopy(_template())
+    battles.sync_mainline_progress(user, "main_00-10")
+    overview = battles.mainline_overview(user)
+    assert overview["chapters"] == 18
+    assert overview["stages"] >= 310
+    assert overview["completed"] == 10
+    assert overview["current"] == "main_00-11"
+    assert overview["current_index"] == 11
+
+
+def test_natural_clear_advances_terminal_pointer_and_unlocks_0_11():
+    user = copy.deepcopy(_template())
+    stages = user.setdefault("dungeon", {}).setdefault("stages", {})
+    stages["main_00-10"] = {
+        "hasBattleReplay": 0,
+        "practiceTimes": 0,
+        "state": 3,
+        "completeTimes": 1,
+        "stageId": "main_00-10",
+        "startTimes": 1,
+    }
+    next_stage = battles.advance_mainline_after_clear(user, "main_00-10")
+    assert next_stage == "main_00-11"
+    assert user["status"]["mainStageProgress"] == "main_00-11"
+    assert user["dungeon"]["stages"]["main_00-11"]["state"] == 0

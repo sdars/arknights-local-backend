@@ -37,6 +37,7 @@ def test_account_console_status_inventory_and_assets(client, test_account, login
     for anchor in ("profile", "currency", "inventory", "assets", "operators", "squads", "mail", "advanced"):
         assert f'id="{anchor}"' in page.text
 
+    before = sync_user(client, login)["status"]["mainStageProgress"]
     status = {
         "level": "42",
         "exp": "1234",
@@ -61,7 +62,6 @@ def test_account_console_status_inventory_and_assets(client, test_account, login
         "maxAp": "200",
         "buyApRemainTimes": "9",
         "progress": "7",
-        "mainStageProgress": "main_04-10",
         "secretary": "char_002_amiya",
         "secretarySkinId": "char_002_amiya#1",
         "avatarId": "avatar_def_01",
@@ -79,7 +79,6 @@ def test_account_console_status_inventory_and_assets(client, test_account, login
     for key, value in status.items():
         if key in {
             "resume",
-            "mainStageProgress",
             "secretary",
             "secretarySkinId",
             "avatarId",
@@ -92,6 +91,9 @@ def test_account_console_status_inventory_and_assets(client, test_account, login
             assert user["status"][key] >= int(value)
         else:
             assert user["status"][key] == int(value), (key, user["status"].get(key))
+    # The ordinary status form must not implicitly clear or advance a mainline
+    # stage just because it contains progress-related fields.
+    assert user["status"]["mainStageProgress"] == before
 
     add = client.post(
         f"{client.base_url}/admin/accounts/{uid}/inventory",
@@ -150,7 +152,7 @@ def test_account_console_status_inventory_and_assets(client, test_account, login
         user_json = conn.execute("SELECT user_json FROM accounts WHERE uid=?", (int(uid),)).fetchone()[0]
     persisted = json.loads(user_json)
     assert persisted["status"]["gold"] == 765432
-    assert persisted["status"]["mainStageProgress"] == "main_04-10"
+    assert persisted["status"]["mainStageProgress"] == before
 
 
 def test_account_console_operators_squads_and_protocol(client, test_account, login):

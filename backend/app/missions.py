@@ -107,6 +107,66 @@ def ensure_mission_state(user):
                             )
                 if int(node.get("state", 0) or 0) != 3:
                     node["state"] = 2
+    ensure_main_mission_chain(user)
+
+
+def _mission_sort_key(mission_id):
+    match = re.search(r"(\d+)$", str(mission_id or ""))
+    return (int(match.group(1)) if match else 10**9, str(mission_id))
+
+
+def ensure_main_mission_chain(user):
+    """Publish the current MAIN mission instead of leaving only main_1 in the save.
+
+    The terminal card renders the current main mission; a save containing only
+    a completed main_1 makes it say "全部完成" even though later chapters are
+    still locked.
+    """
+    table = (game_data.mission_table() or {}).get("missions") or {}
+    entries = [
+        (str(mission_id), entry)
+        for mission_id, entry in table.items()
+        if isinstance(entry, dict) and str(entry.get("type") or "").upper() == "MAIN"
+    ]
+    entries.sort(key=lambda row: _mission_sort_key(row[0]))
+    bucket = mission_bucket(user, "MAIN", create=True)
+    stages = ((user.get("dungeon") or {}).get("stages")) or {}
+    activated = False
+    for mission_id, entry in entries:
+        template = str(entry.get("template") or "")
+        params = [str(value) for value in entry.get("param") or []]
+        stage_id = next((value for value in params if value in stages), "")
+        cleared = False
+        if stage_id and template in {"CompleteMainStage", "CompleteStage"}:
+            node = stages.get(stage_id)
+            cleared = isinstance(node, dict) and (
+                int(node.get("state", 0) or 0) >= 2
+                or int(node.get("completeTimes", 0) or 0) > 0
+            )
+        existing = bucket.get(mission_id)
+        if cleared:
+            node = existing if isinstance(existing, dict) else {"state": 2, "progress": []}
+            if int(node.get("state", 0) or 0) != 3:
+                node["state"] = 2
+            node["progress"] = [{"value": 1, "target": 1}]
+            bucket[mission_id] = node
+            continue
+        if isinstance(existing, dict) and int(existing.get("state", 0) or 0) == 3:
+            continue
+        if activated:
+            if isinstance(existing, dict):
+                bucket.pop(mission_id, None)
+            continue
+        node = existing if isinstance(existing, dict) else {"state": 1, "progress": []}
+        was_claimable = int(node.get("state", 0) or 0) == 2
+        # A stage can be reset from the account console while an older save
+        # still has its mission at the claimable state.  Only state 3 means the
+        # reward was actually claimed; an uncleared stage must be active again.
+        node["state"] = 1
+        if was_claimable or not node.get("progress"):
+            node["progress"] = [{"value": 0, "target": 1}]
+        bucket[mission_id] = node
+        activated = True
 
 
 def _next_mission_id(mission_id, mission_type):
@@ -275,7 +335,7 @@ def exchange_reward(user, reward_id):
     return _success(items, {"playerDataDelta": delta})
 
 
-def record_stage_clear(user, stage_id, complete_state):
+def record_stage_clear(user, stage_id, complete_state, kill_count=0, assist=False):
     root = mission_root(user)
     completed = []
     for mission_type, bucket in (root.get("missions") or {}).items():
@@ -293,29 +353,43 @@ def record_stage_clear(user, stage_id, complete_state):
             template = str(entry.get("template") or "")
             params = [str(value) for value in entry.get("param") or []]
             matched = False
+            increment = 0
+            complete = False
             if template in {"CompleteStage", "CompleteMainStage"} and stage_id in params:
                 matched = True
+                complete = True
             elif template in {"CompleteAnyStage", "CompleteStageAnyType"}:
                 matched = True
+                increment = 1
             elif template == "CompleteStage" and not params:
                 matched = True
+                complete = True
+            elif template == "StageWithEnemyKill" and int(kill_count or 0) > 0:
+                matched = True
+                increment = 1
+            elif template == "EnemyKillInAnyStage" and int(kill_count or 0) > 0:
+                matched = True
+                increment = int(kill_count or 0)
+            elif template == "StageWithAssistChar" and assist:
+                matched = True
+                increment = 1
             if not matched:
                 continue
             progress = node.get("progress")
-            if template in {"CompleteStage", "CompleteMainStage"}:
+            if complete:
                 _complete_progress(node)
             elif isinstance(progress, list) and progress:
                 for item in progress:
                     if isinstance(item, dict):
-                        item["value"] = int(item.get("value", 0) or 0) + 1
+                        item["value"] = int(item.get("value", 0) or 0) + increment
             else:
-                node["progress"] = [{"value": 1, "target": 1}]
+                node["progress"] = [{"value": increment, "target": 1}]
             done = True
             for item in node.get("progress") or []:
                 if isinstance(item, dict) and int(item.get("value", 0) or 0) < int(item.get("target", 1) or 1):
                     done = False
                     break
-            if template in {"CompleteStage", "CompleteMainStage"} or done:
+            if complete or done:
                 node["state"] = 2
                 completed.append(mission_id)
     return completed

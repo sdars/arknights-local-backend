@@ -69,11 +69,14 @@ def decrypt_battle_data(encoded, login_time):
         return None
 
 
-def record_battle_start(account_id, battle_id, stage_id):
+def record_battle_start(account_id, battle_id, stage_id, payload=None):
+    payload_text = ""
+    if payload is not None:
+        payload_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     with connect() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO battle_sessions(battle_id,account_id,stage_id,started_at,finished_at) VALUES(?,?,?,?,NULL)",
-            (battle_id, account_id, stage_id, now_ts()),
+            "INSERT OR REPLACE INTO battle_sessions(battle_id,account_id,stage_id,started_at,finished_at,payload_json) VALUES(?,?,?,?,NULL,?)",
+            (battle_id, account_id, stage_id, now_ts(), payload_text),
         )
 
 
@@ -98,6 +101,130 @@ def _close_battle(battle_id):
         return
     with connect() as conn:
         conn.execute("UPDATE battle_sessions SET finished_at=? WHERE battle_id=?", (now_ts(), battle_id))
+
+
+def record_battle_result(account, user, session, battle_id, stage_id, stage_cfg, complete_state, decode, body):
+    """Persist the client-reported battle payload for the admin console."""
+    payload = decode if isinstance(decode, dict) else {}
+    if isinstance(payload, dict) and session and session.get("payload_json"):
+        try:
+            payload = {**payload, "_battleStart": json.loads(session["payload_json"])}
+        except Exception:
+            pass
+    payload["_battleFinish"] = body
+    kill_count = 0
+    for key in ("killCnt", "killCount", "kills"):
+        try:
+            kill_count = int(payload.get(key) or body.get(key) or 0)
+        except (TypeError, ValueError):
+            kill_count = 0
+        if kill_count:
+            break
+    stage_code = str((stage_cfg or {}).get("code") or "")
+    now = now_ts()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO battle_records(
+                account_id, uid, battle_id, stage_id, stage_code, complete_state,
+                result, kill_count, started_at, finished_at, payload_json, raw_data, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(account["id"]),
+                int(account["uid"]),
+                str(battle_id or ""),
+                str(stage_id or ""),
+                stage_code,
+                int(complete_state or 0),
+                "win" if int(complete_state or 0) >= 2 else "fail",
+                kill_count,
+                int((session or {}).get("started_at") or 0) or None,
+                now,
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(body, ensure_ascii=False, separators=(",", ":")),
+                now,
+            ),
+        )
+
+
+def list_battle_records(uid=None, stage_id="", limit=200):
+    limit = max(1, min(int(limit or 200), 1000))
+    clauses = []
+    params = []
+    if uid:
+        clauses.append("uid=?")
+        params.append(int(uid))
+    if stage_id:
+        clauses.append("(stage_id LIKE ? OR stage_code LIKE ?)")
+        params.extend([f"%{stage_id}%", f"%{stage_id}%"])
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM battle_records{where} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_battle_record(record_id):
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM battle_records WHERE id=?", (int(record_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def save_battle_replay(user, battle_replay):
+    """Store the base64 zip replay on its stage and mirror it in the record log."""
+    if not isinstance(battle_replay, str) or not battle_replay:
+        return {"result": 1, "error": "battleReplay is empty"}
+    stage_id = ""
+    payload = None
+    try:
+        import base64
+        import io
+        import zipfile
+
+        raw = base64.b64decode(battle_replay)
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            for name in archive.namelist():
+                try:
+                    payload = json.loads(archive.read(name).decode("utf-8"))
+                    break
+                except Exception:
+                    continue
+        if isinstance(payload, dict):
+            journal = payload.get("journal") or {}
+            metadata = journal.get("metadata") or {}
+            stage_id = str(metadata.get("stageId") or payload.get("stageId") or "")
+    except Exception:
+        payload = None
+    if not stage_id:
+        return {"result": 1, "error": "cannot resolve replay stage"}
+    stages = _dict(_dict(user, "dungeon"), "stages")
+    node = _stage_entry(stages, stage_id)
+    node["hasBattleReplay"] = 1
+    node["battleReplay"] = battle_replay
+    return {
+        "result": 0,
+        "stageId": stage_id,
+        "playerDataDelta": {
+            "deleted": {},
+            "modified": {"dungeon": {"stages": {stage_id: node}}},
+        },
+    }
+
+
+def load_battle_replay(user, stage_id):
+    stages = ((user.get("dungeon") or {}).get("stages")) or {}
+    node = stages.get(str(stage_id or ""))
+    replay = node.get("battleReplay") if isinstance(node, dict) else ""
+    if not replay:
+        return {"result": 1, "error": "battle replay not found"}
+    return {
+        "result": 0,
+        "battleReplay": replay,
+        "playerDataDelta": {"deleted": {}, "modified": {}},
+    }
 
 
 def _grant_player_exp(user, amount):
@@ -202,6 +329,16 @@ def finish_battle(account, body):
             or (3 if body_result in (None, 0, "0") else 1)
         )
         complete_state = max(1, min(complete_state, 3))
+        try:
+            kill_count = int(decode.get("killCnt") or body.get("killCnt") or 0)
+        except (TypeError, ValueError):
+            kill_count = 0
+        assist = bool(
+            decode.get("assistFriend")
+            or decode.get("assist")
+            or body.get("assistFriend")
+            or body.get("assist")
+        )
 
         dungeon = _dict(user, "dungeon")
         stages = _dict(dungeon, "stages")
@@ -258,10 +395,30 @@ def finish_battle(account, body):
                 response["unlockStages"] = unlocked
                 delta["modified"]["dungeon"] = user.get("dungeon", {})
 
-            completed_missions = missions.record_stage_clear(user, stage_id, complete_state)
+            completed_missions = missions.record_stage_clear(
+                user, stage_id, complete_state, kill_count=kill_count, assist=assist
+            )
+            next_main_stage = advance_mainline_after_clear(user, stage_id)
             if completed_missions:
                 delta["modified"]["mission"] = user.get("mission", {})
+            if next_main_stage:
+                response["nextStage"] = next_main_stage
+            if next_main_stage or completed_missions:
+                delta["modified"]["status"] = user.get("status", {})
+                delta["modified"]["dungeon"] = user.get("dungeon", {})
+                delta["modified"]["mission"] = user.get("mission", {})
 
+        record_battle_result(
+            fresh,
+            user,
+            session,
+            battle_id,
+            stage_id,
+            stage_cfg,
+            complete_state,
+            decode,
+            body,
+        )
         save_player(fresh, user)
         _close_battle((session or {}).get("battle_id") or battle_id or None)
         return response
@@ -270,7 +427,7 @@ def finish_battle(account, body):
 def _main_code(stage_id):
     entry = game_data.stage(stage_id) or {}
     code = str(entry.get("code") or "")
-    match = re.match(r"^(\d+)-(\d+)$", code)
+    match = re.search(r"(\d+)-(\d+)", code)
     if not match:
         return None
     return int(match.group(1)), int(match.group(2))
@@ -278,23 +435,56 @@ def _main_code(stage_id):
 
 def main_stage_sequence():
     stages = (game_data.stage_table() or {}).get("stages") or {}
-    rows = []
-    for stage_id, entry in stages.items():
+    by_code = {}
+
+    def preference(stage_id):
+        text = str(stage_id)
+        return (
+            "#" not in text,
+            text.startswith("main_"),
+            not bool((stages.get(text) or {}).get("isStoryOnly")),
+        )
+
+    for position, (stage_id, entry) in enumerate(stages.items()):
         if not isinstance(entry, dict) or entry.get("stageType") != "MAIN":
             continue
-        code = _main_code(stage_id)
-        if code:
-            rows.append((code, str(stage_id)))
-    rows.sort()
-    return [stage_id for _, stage_id in rows]
+        # Campaign stage ids are main_08-01 / st_08-01.  Side stages
+        # (sub_*), tutorials (tr_*), and difficulty variants (easy_*/tough_*)
+        # are not terminal progress nodes.
+        if not re.match(r"^(main|st)_\d{2}-\d{2}", str(stage_id)):
+            continue
+        code = str(entry.get("code") or "")
+        chapter_match = re.search(r"(\d+)-(\d+)", code)
+        if not chapter_match:
+            continue
+        chapter = int(chapter_match.group(1))
+        current = by_code.get(code)
+        # Story/first-clear variants share the same code (0-10#f#, 17-14#s).
+        # The progression chain must use the canonical battle stage or the
+        # "next stage" pointer stops on a hidden variant.
+        if current is None or preference(stage_id) > preference(current[0]):
+            by_code[code] = (str(stage_id), chapter, position)
+    # Chapter 8 uses R8-*/M8-*/JT8-*/END8-* display codes.  Use the numeric
+    # chapter from the display code for ordering, while preserving the
+    # authoritative stage-table insertion order inside each chapter.
+    chosen = sorted(by_code.values(), key=lambda row: (row[1], row[2]))
+    return [row[0] for row in chosen]
 
 
 def normalize_main_stage(target):
     text = str(target or "").strip()
     if not text:
         return ""
+    if "#" in text:
+        text = text.split("#", 1)[0]
     if text.startswith("main_"):
         return text if game_data.stage(text) else ""
+    if text.startswith("st_") and game_data.stage(text):
+        return text
+    for stage_id in main_stage_sequence():
+        entry = game_data.stage(stage_id) or {}
+        if str(entry.get("code") or "") == text:
+            return stage_id
     match = re.match(r"^(\d+)-(\d+)$", text)
     if not match:
         return ""
@@ -514,20 +704,95 @@ def sync_mainline_progress(user, target):
         node["startTimes"] = max(1, int(node.get("startTimes", 0) or 0))
         marked += 1
     status = user.setdefault("status", {})
-    status["mainStageProgress"] = stage_id
     reconcile_tutorial_state(user)
     next_stage = sequence[end] if end < len(sequence) else ""
-    if next_stage:
-        _stage_node(stages, next_stage)
+    # ``mainStageProgress`` is the stage the terminal jumps to next, not the
+    # last cleared stage.  Keeping it on the cleared stage makes the home
+    # terminal tile claim the whole main story is complete.
+    status["mainStageProgress"] = next_stage or stage_id
+    missions.ensure_main_mission_chain(user)
+    for candidate in ([next_stage] if next_stage else []) + game_data.next_stages(stage_id):
+        if candidate:
+            _stage_node(stages, candidate)
+    # Also publish any side stage whose explicit unlock condition is now met
+    # (for example 0-11 after 0-10, or a training stage after its prerequisites).
+    for candidate_id, entry in tables.items():
+        if not isinstance(entry, dict) or entry.get("stageType") != "MAIN":
+            continue
+        conditions = [c for c in entry.get("unlockCondition") or [] if isinstance(c, dict)]
+        if not conditions:
+            continue
+        if all(
+            _stage_satisfies(stages, c.get("stageId"), c.get("completeState") or "PASS")
+            for c in conditions
+        ):
+            _stage_node(stages, str(candidate_id))
     return {
         "result": 0,
         "stageId": stage_id,
         "nextStage": next_stage,
+        "mainStageProgress": status["mainStageProgress"],
         "marked": marked,
         "playerDataDelta": {
             "deleted": {},
             "modified": {"dungeon": dungeon, "status": status},
         },
+    }
+
+
+def advance_mainline_after_clear(user, stage_id):
+    """Move the terminal pointer after a naturally cleared mainline battle."""
+    text = str(stage_id or "")
+    if not text or "#" in text:
+        return ""
+    sequence = main_stage_sequence()
+    if text not in sequence:
+        return ""
+    index = sequence.index(text)
+    next_stage = sequence[index + 1] if index + 1 < len(sequence) else ""
+    status = user.setdefault("status", {})
+    current = str(status.get("mainStageProgress") or "")
+    current_index = sequence.index(current) if current in sequence else -1
+    target_index = index + 1 if next_stage else index
+    # Replaying an earlier stage must not rewind the terminal pointer.
+    if target_index > current_index:
+        status["mainStageProgress"] = next_stage or text
+    if next_stage:
+        _stage_node(_dict(user, "dungeon").setdefault("stages", {}), next_stage)
+    missions.ensure_main_mission_chain(user)
+    return next_stage if target_index > current_index else ""
+
+
+def mainline_cleared_target(pointer):
+    """Return the last cleared canonical stage for a terminal pointer."""
+    stage_id = normalize_main_stage(pointer)
+    sequence = main_stage_sequence()
+    if stage_id not in sequence:
+        return ""
+    index = sequence.index(stage_id)
+    return sequence[index - 1] if index > 0 else ""
+
+
+def mainline_overview(user):
+    """Human-readable terminal progress for the account console."""
+    sequence = main_stage_sequence()
+    current = str((user.get("status") or {}).get("mainStageProgress") or "")
+    normalized = normalize_main_stage(current)
+    current_index = sequence.index(normalized) if normalized in sequence else -1
+    chapters = {_main_code(stage_id)[0] for stage_id in sequence if _main_code(stage_id)}
+    stages = ((user.get("dungeon") or {}).get("stages") or {})
+    completed = 0
+    for stage_id in sequence[: max(0, current_index)]:
+        node = stages.get(stage_id) or {}
+        if int(node.get("state", 0) or 0) >= 2 or int(node.get("completeTimes", 0) or 0) > 0:
+            completed += 1
+    return {
+        "current": current,
+        "current_stage": normalized,
+        "chapters": len(chapters),
+        "stages": len(sequence),
+        "completed": completed,
+        "current_index": current_index + 1 if current_index >= 0 else 0,
     }
 
 
@@ -541,10 +806,13 @@ def repair_account_tutorial_states():
         except Exception:
             continue
         status = user.get("status") or {}
-        target = normalize_main_stage(status.get("mainStageProgress"))
         changed = False
-        if target and target != "main_00-01":
-            result = sync_mainline_progress(user, target)
+        # ``mainStageProgress`` is the next stage shown by the terminal.  The
+        # repair pass must sync the stage before it, otherwise every backend
+        # restart silently clears the current stage and skips ahead.
+        cleared_target = mainline_cleared_target(status.get("mainStageProgress"))
+        if cleared_target:
+            result = sync_mainline_progress(user, cleared_target)
             changed = result.get("result") == 0
         else:
             changed = reconcile_tutorial_state(user)

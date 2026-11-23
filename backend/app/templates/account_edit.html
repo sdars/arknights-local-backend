@@ -15,6 +15,7 @@
   <div class="actions">
     <a class="btn" href="/admin/accounts">返回列表</a>
     <a class="btn" href="/admin/mail?q={{ account.uid }}">邮件中心</a>
+    <a class="btn" href="/admin/battles?uid={{ account.uid }}">对局记录</a>
   </div>
 </header>
 
@@ -83,8 +84,10 @@
     {{ number_field('maxAp', '理智上限', status.get('maxAp', 1), 1) }}
     {{ number_field('buyApRemainTimes', '源石换理智次数', status.get('buyApRemainTimes', 0)) }}
     {{ number_field('progress', '进度值', status.get('progress', 0)) }}
-    <label>主线进度<input name="mainStageProgress" value="{{ status.get('mainStageProgress', '') }}" placeholder="main_00-10 / 0-10"></label>
-    <p class="muted small-note span-all">保存时会自动把目标关卡之前的主线关卡与训练关标记为通关，并解锁下一关。</p>
+    <label>终端当前关卡<input value="{{ status.get('mainStageProgress', '') }}" readonly></label>
+    <label>设置已通关至<input name="mainlineTarget" value="" placeholder="0-10 / main_00-10"></label>
+    <p class="muted small-note span-all">“设置已通关至”会把目标及其之前的主线关卡、符合条件的训练关标记为通关，终端当前关卡自动推进到下一关；留空不会改动主线。保存货币等其它字段不会误通关当前关卡。</p>
+    <p class="muted small-note span-all">主线共 {{ mainline_summary.chapters }} 章 / {{ mainline_summary.stages }} 关；已通过 {{ mainline_summary.completed }} 关，当前位置 {{ mainline_summary.current or '-' }}。</p>
     <label>助理干员<input name="secretary" value="{{ status.get('secretary', '') }}" list="char-catalog"></label>
     <label>助理皮肤<input name="secretarySkinId" value="{{ status.get('secretarySkinId', '') }}" list="skin-catalog"></label>
     <label>头像 ID<input name="avatarId" value="{{ status.get('avatarId', '') }}" list="avatar-catalog"></label>

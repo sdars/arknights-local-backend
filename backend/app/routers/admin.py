@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import sqlite3
+import time
 import zipfile
 from pathlib import Path
 
@@ -1041,6 +1042,7 @@ def _account_page_context(account):
         "mail_templates": mail_templates,
         "orders": orders,
         "debt_rows": debt_rows,
+        "mainline_summary": battles.mainline_overview(user),
         "summary": {
             "inventory": len(inventory_rows),
             "characters": len(character_rows),
@@ -1230,6 +1232,44 @@ async def accounts_page(request: Request, q: str = ""):
     )
 
 
+@router.get("/battles", response_class=HTMLResponse)
+async def battles_page(request: Request, uid: str = "", stage: str = "", limit: str = "200"):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    uid_value = _optional_int(uid)
+    rows = battles.list_battle_records(uid=uid_value, stage_id=stage.strip(), limit=_int(limit, 200))
+    records = []
+    for row in rows:
+        item = dict(row)
+        try:
+            payload = json.loads(item.get("payload_json") or "{}")
+        except Exception:
+            payload = {}
+        item["payload_pretty"] = json.dumps(payload, ensure_ascii=False, indent=2)[:20000]
+        try:
+            raw = json.loads(item.get("raw_data") or "{}")
+        except Exception:
+            raw = {}
+        item["raw_pretty"] = json.dumps(raw, ensure_ascii=False, indent=2)[:20000]
+        item["start_text"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(item.get("started_at") or item.get("created_at") or 0)))
+        item["end_text"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(item.get("finished_at") or item.get("created_at") or 0)))
+        records.append(item)
+    return templates.TemplateResponse(
+        request,
+        "battles.html",
+        {
+            "admin": admin_name(request),
+            "active": "battles",
+            "records": records,
+            "uid": uid,
+            "stage": stage,
+            "limit": limit,
+            "message": _take_flash(request),
+        },
+    )
+
+
 @router.post("/accounts/create")
 async def account_create(
     request: Request,
@@ -1317,7 +1357,6 @@ async def account_status_update(request: Request, uid: int):
     if "ap" in form:
         status["ap"] = min(_int(status.get("ap"), status["maxAp"]), status["maxAp"])
     for key in (
-        "mainStageProgress",
         "secretary",
         "secretarySkinId",
         "avatarId",
@@ -1334,10 +1373,15 @@ async def account_status_update(request: Request, uid: int):
         status["nickName"] = str(form.get("nickName")).strip()
         with connect() as conn:
             conn.execute("UPDATE accounts SET nickname=? WHERE uid=?", (status["nickName"], uid))
-    if "mainStageProgress" in form and str(form.get("mainStageProgress") or "").strip():
-        sync = battles.sync_mainline_progress(user, str(form.get("mainStageProgress")).strip())
+    mainline_target = str(form.get("mainlineTarget") or "").strip()
+    if mainline_target:
+        sync = battles.sync_mainline_progress(user, mainline_target)
         if sync.get("result") == 0:
-            _flash(request, f"主线进度已同步到 {sync.get('stageId')}，{sync.get('marked')} 个关卡标记为通关")
+            _flash(
+                request,
+                f"已通关至 {sync.get('stageId')}，终端当前关卡为 {sync.get('mainStageProgress')}，"
+                f"共标记 {sync.get('marked')} 个关卡",
+            )
         else:
             _flash(request, sync.get("error") or "主线进度同步失败")
     _save_user(uid, user)

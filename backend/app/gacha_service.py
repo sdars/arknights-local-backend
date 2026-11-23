@@ -68,6 +68,12 @@ def _overrides():
 def _save_overrides(data):
     OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
     OVERRIDE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # File timestamps can have a coarse granularity on some filesystems.  Do
+    # not let a same-tick write keep serving the previous (for example a
+    # tombstoned) override table from the in-process cache.
+    stamp = _mtime(OVERRIDE_PATH)
+    with _lock:
+        _cache["overrides"] = (stamp, copy.deepcopy(data))
 
 
 def _extra_pool_rows():
