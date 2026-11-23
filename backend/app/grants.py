@@ -33,6 +33,20 @@ INVENTORY_TYPES = {
 }
 
 
+def normalize_platform(value):
+    text = str(value or "").strip().lower()
+    if text in {"2", "ios", "iphone", "ipad", "appstore"}:
+        return "ios"
+    if text in {"1", "android", "googleplay", "google"}:
+        return "android"
+    return ""
+
+
+def diamond_status_key(user, platform=None):
+    resolved = normalize_platform(platform) or normalize_platform((user or {}).get("localPlatform"))
+    return "iosDiamond" if resolved == "ios" else "androidDiamond"
+
+
 def _dict(parent, key):
     value = parent.get(key)
     if not isinstance(value, dict):
@@ -230,7 +244,7 @@ def _grant_monthly_card(user, count, now, touched):
     touched.add("status")
 
 
-def _grant_item(user, item, source, now, touched):
+def _grant_item(user, item, source, now, touched, platform=None):
     item_id = item["id"]
     item_type = item["type"]
     count = item["count"]
@@ -283,8 +297,7 @@ def _grant_item(user, item, source, now, touched):
 
     if item_type == "DIAMOND":
         status = _dict(user, "status")
-        _add(status, "androidDiamond", count)
-        _add(status, "iosDiamond", count)
+        _add(status, diamond_status_key(user, platform), count)
         touched.add("status")
         return
 
@@ -346,12 +359,12 @@ def _grant_item(user, item, source, now, touched):
         touched.add("consumable")
 
 
-def apply_items(user, items, source="unknown", now=None):
+def apply_items(user, items, source="unknown", now=None, platform=None):
     now = int(now or time.time())
     normalized = _coalesce(items)
     touched = set()
     for item in normalized:
-        _grant_item(user, item, source, now, touched)
+        _grant_item(user, item, source, now, touched, platform=platform)
     modified = {key: user.get(key) for key in sorted(touched) if key in user}
     return normalized, {"deleted": {}, "modified": modified}
 

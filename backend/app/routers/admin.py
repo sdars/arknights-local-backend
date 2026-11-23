@@ -14,7 +14,7 @@ from ..config import APP_DIR, ASSET_CDN, SERVER_NAME, CLIENT_VERSION, RES_VERSIO
 from ..db import connect, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
-from .. import game_data, grants, mail_service, runtime_settings, selfcheck
+from .. import game_data, gift_catalog, grants, mail_service, runtime_settings, selfcheck
 from .. import protocol_catalog
 from .. import il2cpp_dump
 
@@ -295,7 +295,16 @@ def _account_page_context(account):
             }
         )
     mails = mail_service.list_for_uid(account["uid"])
-    orders = _orders_for(account["id"])
+    orders = []
+    for raw_order in _orders_for(account["id"]):
+        order = dict(raw_order)
+        try:
+            granted_items = json.loads(order.get("granted_items_json") or "[]")
+        except Exception:
+            granted_items = []
+        order["gift_items"] = gift_catalog.item_rows(granted_items)
+        order["gift_name"] = gift_catalog.display_name(order.get("good_id"))
+        orders.append(order)
     granted_orders = sum(1 for order in orders if _int(order["granted"], 0))
     return {
         "account": account,
@@ -831,6 +840,33 @@ async def mail_center(request: Request, edit: int = 0, q: str = ""):
             "accounts": list_accounts(),
             "q": q,
             "message": _take_flash(request),
+        },
+    )
+
+
+@router.get("/gifts", response_class=HTMLResponse)
+async def gifts_page(request: Request, q: str = ""):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    needle = q.strip().lower()
+    rows = []
+    for row in gift_catalog.catalog_rows():
+        if needle and needle not in str(row["goodId"]).lower() and needle not in str(row["displayName"]).lower():
+            continue
+        enriched = dict(row)
+        enriched["contents"] = gift_catalog.item_rows(row.get("items") or [])
+        rows.append(enriched)
+    return templates.TemplateResponse(
+        request,
+        "gifts.html",
+        {
+            "admin": admin_name(request),
+            "active": "gifts",
+            "rows": rows,
+            "query": q,
+            "total": len(gift_catalog.catalog_rows()),
+            "current_count": len(gift_catalog.current_goods()),
         },
     )
 

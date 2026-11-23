@@ -133,6 +133,42 @@ def init_db():
             conn.execute("ALTER TABLE orders ADD COLUMN granted_at INTEGER")
         if "granted_items_json" not in order_columns:
             conn.execute("ALTER TABLE orders ADD COLUMN granted_items_json TEXT")
+        if "platform" not in order_columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN platform TEXT")
+        account_columns = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)")}
+        if "platform" not in account_columns:
+            conn.execute("ALTER TABLE accounts ADD COLUMN platform TEXT NOT NULL DEFAULT 'android'")
+        conn.execute("UPDATE accounts SET platform='android' WHERE platform IS NULL OR platform=''")
+        conn.execute(
+            """UPDATE orders SET platform=(
+                   SELECT platform FROM accounts WHERE accounts.id=orders.account_id
+               )
+               WHERE platform IS NULL OR platform=''"""
+        )
+        # Older builds credited DIAMOND to both stores.  Repair the obvious
+        # double-write on Android accounts while preserving any account that
+        # already carries a genuinely different iOS balance.
+        for account_row in conn.execute("SELECT id,user_json,platform FROM accounts").fetchall():
+            try:
+                user = json.loads(account_row["user_json"])
+            except Exception:
+                continue
+            status = user.get("status") or {}
+            android = int(status.get("androidDiamond") or 0)
+            ios = int(status.get("iosDiamond") or 0)
+            changed = False
+            if not user.get("localPlatform"):
+                user["localPlatform"] = str(account_row["platform"] or "android")
+                changed = True
+            if str(account_row["platform"] or "") == "android" and ios == android and ios > 0:
+                status["iosDiamond"] = 0
+                user["status"] = status
+                changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE accounts SET user_json=? WHERE id=?",
+                    (json.dumps(user, ensure_ascii=False, separators=(",", ":")), account_row["id"]),
+                )
         row = conn.execute("SELECT id FROM admin_users WHERE username=?", (ADMIN_USER,)).fetchone()
         if not row:
             conn.execute(

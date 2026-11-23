@@ -22,7 +22,7 @@
 <section class="cards account-cards">
   <div class="card"><span class="muted">等级</span><strong>{{ status.get('level', 1) }}</strong></div>
   <div class="card"><span class="muted">龙门币</span><strong class="small">{{ status.get('gold', 0) }}</strong></div>
-  <div class="card"><span class="muted">合成玉 / 源石</span><strong class="small">{{ status.get('androidDiamond', 0) }} / {{ status.get('iosDiamond', 0) }}</strong></div>
+  <div class="card"><span class="muted">安卓 / iOS 源石</span><strong class="small">{{ status.get('androidDiamond', 0) }} / {{ status.get('iosDiamond', 0) }}</strong></div>
   <div class="card"><span class="muted">干员 / 编队</span><strong>{{ summary.characters }} / {{ summary.squads }}</strong></div>
   <div class="card"><span class="muted">库存条目</span><strong>{{ summary.inventory }}</strong></div>
   <div class="card"><span class="muted">未读邮件</span><strong>{{ summary.unread_mails }}</strong></div>
@@ -317,19 +317,23 @@
   <div class="panel-head"><h2>订单与补发</h2><span class="muted">最近 {{ orders|length }} 笔 · 已发放 {{ summary.granted_orders }}</span></div>
   <div class="table-wrap">
   <table class="table compact-table">
-    <thead><tr><th>订单号</th><th>商品</th><th>金额</th><th>状态</th><th>已发放</th><th>创建时间</th></tr></thead>
+    <thead><tr><th>订单号</th><th>商品</th><th>金额</th><th>平台</th><th>状态</th><th>已发放</th><th>礼包内容</th><th>创建时间</th></tr></thead>
     <tbody>
     {% for order in orders %}
       <tr>
         <td class="mono">{{ order.order_id }}</td>
-        <td>{{ order.product_name or order.good_id }}</td>
+        <td>{{ order.product_name or order.gift_name or order.good_id }}</td>
         <td>{{ order.amount }}</td>
+        <td>{% if order.platform == 'ios' %}iOS{% else %}Android{% endif %}</td>
         <td>{% if order.status == 2 %}<span class="status s2">已支付</span>{% else %}<span class="status s3">{{ order.status }}</span>{% endif %}</td>
         <td>{% if order.granted %}<span class="status s2">是</span>{% else %}<span class="status s4">否</span>{% endif %}</td>
+        <td class="small-note">
+          {% for item in order.gift_items %}{{ item.name }} × {{ item.count }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">待发放 / 无明细</span>{% endfor %}
+        </td>
         <td class="mono">{{ order.created_at }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="muted">暂无订单。</td></tr>
+      <tr><td colspan="8" class="muted">暂无订单。</td></tr>
     {% endfor %}
     </tbody>
   </table>

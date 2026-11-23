@@ -181,7 +181,7 @@ async def app_product(request: Request):
     account = account_by_token(body.get("token", ""))
     if not account:
         return {"status": 1, "msg": "Invalid Token", "type": "A"}
-    return payments.sdk_app_product(account)
+    return payments.sdk_app_product(account, body.get("platform"))
 
 
 @router.post("/user/pay/order/v2/create/app_product/alipay")

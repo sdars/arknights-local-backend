@@ -255,6 +255,7 @@ def test_confirm_order_applies_and_persists_rewards(client, login, test_account)
     after = _account_user(test_account["uid"])
     assert after["status"]["gold"] == before["status"]["gold"] + 40000
     assert after["status"]["androidDiamond"] == before["status"]["androidDiamond"] + 13
+    assert after["status"]["iosDiamond"] == before["status"].get("iosDiamond", 0)
     assert after["inventory"]["30032"] == int(before.get("inventory", {}).get("30032", 0) or 0) + 7
     with sqlite3.connect(DB_PATH) as conn:
         order = conn.execute(
@@ -410,7 +411,7 @@ def test_unconfigured_paid_product_is_not_marked_granted(client, login):
     created = client.post(
         f"{client.base_url}/pay/createOrder",
         headers=login["headers"],
-        json={"storeId": 5399, "goodId": "GP_Once_385"},
+        json={"storeId": 5399, "goodId": "GP_NOT_CONFIGURED"},
         timeout=15,
     ).json()
     confirmed = client.post(
@@ -427,3 +428,52 @@ def test_unconfigured_paid_product_is_not_marked_granted(client, login):
         ).fetchone()
     assert row[0] == 0
     assert row[1] == 0
+
+
+def test_ios_order_credits_only_ios_originium(client, login, test_account):
+    before = _account_user(test_account["uid"])
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 6936, "goodId": "CS_1_r7", "platform": 2},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert confirmed["result"] == 0
+    after = _account_user(test_account["uid"])
+    assert after["status"]["iosDiamond"] > int(before["status"].get("iosDiamond", 0) or 0)
+    assert after["status"]["androidDiamond"] == int(before["status"].get("androidDiamond", 0) or 0)
+
+
+def test_gift_catalog_has_contents_for_legacy_paid_products():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    catalog = json.loads((root / "backend" / "data" / "gift_packages.json").read_text(encoding="utf-8"))
+
+    for good_id in ("GP_Once_384", "GP_Once_385", "GP_Once_523", "GP_gM_96_M_1"):
+        row = catalog.get(good_id) or {}
+        assert row.get("items"), good_id
+
+
+def test_legacy_gift_package_purchase_grants_catalog_contents(client, login):
+    created = client.post(
+        f"{client.base_url}/pay/createOrder",
+        headers=login["headers"],
+        json={"storeId": 5398, "goodId": "GP_Once_384"},
+        timeout=15,
+    ).json()
+    confirmed = client.post(
+        f"{client.base_url}/pay/confirmOrder",
+        headers=login["headers"],
+        json={"orderId": created["orderId"]},
+        timeout=15,
+    ).json()
+    assert confirmed["result"] == 0
+    items = confirmed["receiveItems"]["items"]
+    assert any(item["id"] == "3263" and item["type"] == "MATERIAL" for item in items)

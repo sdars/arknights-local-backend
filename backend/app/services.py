@@ -41,9 +41,10 @@ def create_account(phone, token=None, nickname="博士"):
         status["lastOnlineTs"] = ts
         status["lastRefreshTs"] = ts
         status["serverName"] = SERVER_NAME
+        user["localPlatform"] = "android"
         conn.execute(
-            "INSERT INTO accounts(uid,phone,token,nickname,created_at,user_json) VALUES(?,?,?,?,?,?)",
-            (uid, phone, token, nickname, ts, json.dumps(user, ensure_ascii=False, separators=(",", ":"))),
+            "INSERT INTO accounts(uid,phone,token,nickname,created_at,user_json,platform) VALUES(?,?,?,?,?,?,?)",
+            (uid, phone, token, nickname, ts, json.dumps(user, ensure_ascii=False, separators=(",", ":")), "android"),
         )
         row = conn.execute("SELECT * FROM accounts WHERE uid=?", (uid,)).fetchone()
         return dict(row), True
@@ -79,10 +80,28 @@ def save_player(account, user):
         )
 
 
-def touch_login(account, device_id=None, ip=None):
+def touch_login(account, device_id=None, ip=None, platform=None):
     ts = now_ts()
+    from .grants import normalize_platform
+
+    resolved = normalize_platform(platform) or normalize_platform(account.get("platform")) or "android"
     with connect() as conn:
-        conn.execute("UPDATE accounts SET last_login_at=? WHERE uid=?", (ts, account["uid"]))
+        conn.execute(
+            "UPDATE accounts SET last_login_at=?,platform=? WHERE uid=?",
+            (ts, resolved, account["uid"]),
+        )
+        row = conn.execute("SELECT user_json FROM accounts WHERE uid=?", (account["uid"],)).fetchone()
+        if row:
+            try:
+                user = json.loads(row["user_json"])
+            except Exception:
+                user = {}
+            if isinstance(user, dict):
+                user["localPlatform"] = resolved
+                conn.execute(
+                    "UPDATE accounts SET user_json=? WHERE uid=?",
+                    (json.dumps(user, ensure_ascii=False, separators=(",", ":")), account["uid"]),
+                )
         conn.execute(
             "INSERT INTO sessions(id,account_id,device_id,ip,created_at,last_seen) VALUES(?,?,?,?,?,?)",
             (new_token("sess_"), account["id"], device_id, ip, ts, ts),

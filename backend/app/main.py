@@ -53,6 +53,10 @@ async def on_startup():
     except Exception:
         pass
     try:
+        payments.reconcile_gift_purchase_state()
+    except Exception:
+        pass
+    try:
         mail_service.seed_templates()
     except Exception:
         pass

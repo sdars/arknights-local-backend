@@ -10,7 +10,17 @@ from ..config import BATTLE_START_TEMPLATE
 from ..db import now_ts
 from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response
-from .. import battles, game_data, grants, mail_service, missions, monthly_card, payments, runtime_settings
+from .. import (
+    battles,
+    game_data,
+    grants,
+    mail_service,
+    missions,
+    monthly_card,
+    payments,
+    runtime_settings,
+    shop_service,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,7 +74,12 @@ async def account_login(request: Request):
         return {"result": 2, "error": "客户端版本需要更新"}
     if assets_version and assets_version != settings["res_version"] and settings["force_resource_update"]:
         return {"result": 4, "error": "资源需要更新"}
-    touch_login(account, body.get("deviceId"), request.client.host if request.client else None)
+    touch_login(
+        account,
+        body.get("deviceId"),
+        request.client.host if request.client else None,
+        body.get("platform"),
+    )
     data = {
         "result": 0,
         "uid": account["uid"],
@@ -535,7 +550,12 @@ async def create_order(request: Request):
     if not account:
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
-    order = payments.create_order(account, body.get("storeId"), body.get("goodId"))
+    order = payments.create_order(
+        account,
+        body.get("storeId"),
+        body.get("goodId"),
+        body.get("platform"),
+    )
     return payments.create_order_response(order)
 
 
@@ -680,8 +700,14 @@ async def extra_good_list():
 
 
 @router.post("/shop/getGPGoodList")
-async def gp_good_list():
-    return shop_response("GPGoodList.json")
+async def gp_good_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    payload = shop_service.decorate_gp_payload(user)
+    payload["playerDataDelta"] = {"deleted": {}, "modified": {}}
+    return payload
 
 
 @router.post("/shop/getLMTGSGoodList")
@@ -720,6 +746,69 @@ async def furni_good_list():
 
 
 @router.post("/shop/getGoodPurchaseState")
-async def good_purchase_state():
-    return shop_response("GoodPurchaseState.json")
+async def good_purchase_state(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    requested = body.get("goodIdMap") if isinstance(body, dict) else {}
+    if not isinstance(requested, dict):
+        requested = body if isinstance(body, dict) else {}
+    return {
+        "result": shop_service.purchase_state(user, requested),
+        "playerDataDelta": {"deleted": {}, "modified": {}},
+    }
+
+
+def _shop_platform(account, body):
+    user = player_data(account)
+    return (
+        grants.normalize_platform((body or {}).get("platform"))
+        or grants.normalize_platform(account.get("platform"))
+        or grants.normalize_platform(user.get("localPlatform"))
+        or "android"
+    )
+
+
+@router.post("/shop/buyGPGood")
+async def buy_gp_good(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    platform = _shop_platform(account, body)
+    result = shop_service.buy_gp(user, body.get("goodId"), platform=platform)
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
+
+
+@router.post("/shop/buyGPGoodWithTicket")
+async def buy_gp_good_with_ticket(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    platform = _shop_platform(account, body)
+    result = shop_service.buy_gp_with_ticket(
+        user,
+        body.get("goodId"),
+        ticket_id=body.get("ticketId"),
+        platform=platform,
+    )
+    if result.get("result") == 0:
+        save_player(account, user)
+    return result
 

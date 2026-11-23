@@ -34,6 +34,15 @@ def test_admin_login_and_development_page(client):
     assert body["counts"]["protocol_types"] >= 1
 
 
+def test_admin_gift_catalog_page_and_legacy_contents(client):
+    assert admin_login(client).status_code == 303
+    page = client.get(f"{client.base_url}/admin/gifts?q=GP_Once_384", timeout=20)
+    assert page.status_code == 200
+    assert "GP_Once_384" in page.text
+    assert "医疗芯片" in page.text
+    assert "3263" in page.text or "医疗双芯片" in page.text
+
+
 def test_adb_diagnostics_cover_app_tls_path(client):
     assert admin_login(client).status_code == 303
     response = client.get(f"{client.base_url}/admin/development/adb.json", timeout=30)

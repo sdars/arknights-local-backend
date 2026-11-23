@@ -7,8 +7,8 @@ from urllib.parse import urlencode
 
 from .config import APP_CODE, BASE_DIR
 from .db import connect, now_ts
-from .grants import apply_items, empty_delta, merge_delta
-from . import monthly_card
+from .grants import apply_items, empty_delta, merge_delta, normalize_platform
+from . import gift_catalog, monthly_card
 
 
 PRODUCT_PATH = BASE_DIR / "fixtures" / "product_list.json"
@@ -19,6 +19,10 @@ _products = None
 _shop_goods = None
 _shop_nodes = None
 _cash_goods = None
+
+
+def order_platform(value):
+    return normalize_platform(value)
 
 
 def products():
@@ -136,7 +140,13 @@ def good_items(good_id):
     if is_cash_good(good_id):
         item = cash_good_item(good_id, first_purchase=False)
         return [item] if item else []
-    return list(shop_goods().get(str(good_id or ""), []))
+    good_id = str(good_id or "")
+    items = shop_goods().get(good_id)
+    if items:
+        return list(items)
+    if good_id.startswith("GP_"):
+        return gift_catalog.items(good_id)
+    return []
 
 
 def _first_cash_purchase(conn, order):
@@ -185,7 +195,7 @@ def _extension(order):
     }
 
 
-def create_order(account, store_id=None, good_id=None):
+def create_order(account, store_id=None, good_id=None, platform=None):
     product = find_product(store_id, good_id)
     if not product:
         return None
@@ -194,6 +204,12 @@ def create_order(account, store_id=None, good_id=None):
     # precision prevents collisions when protocol tests create several orders
     # inside the same second.
     order_id = f"{int(time.time() * 1_000_000)}{account['uid']}"
+    resolved_platform = (
+        order_platform(platform)
+        or order_platform(account.get("platform"))
+        or order_platform((json.loads(account.get("user_json") or "{}") or {}).get("localPlatform"))
+        or "android"
+    )
     order = {
         "order_id": order_id,
         "account_id": account["id"],
@@ -206,17 +222,22 @@ def create_order(account, store_id=None, good_id=None):
         "status": 0,
         "created_at": ts,
         "paid_at": None,
-        "raw_json": json.dumps({"storeId": store_id, "goodId": good_id}, ensure_ascii=False),
+        "platform": resolved_platform,
+        "raw_json": json.dumps(
+            {"storeId": store_id, "goodId": good_id, "platform": resolved_platform},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
     }
     with connect() as conn:
         conn.execute("DELETE FROM orders WHERE account_id=? AND status=0", (account["id"],))
         conn.execute(
-            """INSERT INTO orders(order_id,account_id,uid,token,store_id,good_id,product_name,amount,status,created_at,paid_at,raw_json)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO orders(order_id,account_id,uid,token,store_id,good_id,product_name,amount,status,created_at,paid_at,raw_json,platform)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 order["order_id"], order["account_id"], order["uid"], order["token"],
                 order["store_id"], order["good_id"], order["product_name"], order["amount"],
-                0, order["created_at"], None, order["raw_json"],
+                0, order["created_at"], None, order["raw_json"], order["platform"],
             ),
         )
     return order
@@ -251,10 +272,18 @@ def create_order_response(order):
     }
 
 
-def sdk_app_product(account):
+def sdk_app_product(account, platform=None):
     order = latest_order(account)
     if not order:
         return {"status": 1, "msg": "order not found", "type": "A"}
+    resolved = order_platform(platform)
+    if resolved and resolved != order.get("platform"):
+        with connect() as conn:
+            conn.execute(
+                "UPDATE orders SET platform=? WHERE order_id=?",
+                (resolved, order["order_id"]),
+            )
+        order["platform"] = resolved
     return {
         "data": {
             "orderId": order["order_id"],
@@ -420,18 +449,27 @@ def confirm_order(account, order_id):
             delta = empty_delta()
             applied = False
             granted_items = []
+            platform = (
+                order_platform(order.get("platform"))
+                or order_platform(account_row["platform"] if "platform" in account_row.keys() else None)
+            )
             granted = int(order.get("granted", 0) or 0)
             has_ledger = bool(order.get("granted_items_json"))
-            repair_cash = granted and not has_ledger and is_cash_good(order["good_id"]) and bool(items)
-            if not granted or repair_cash:
+            repair_missing_ledger = granted and not has_ledger and bool(items)
+            if not granted or repair_missing_ledger:
                 applied = True
                 user = json.loads(account_row["user_json"])
-                _, delta = apply_items(user, items, source="shop")
+                _, delta = apply_items(user, items, source="shop", platform=platform)
                 granted_items = list(items)
                 if card_id:
-                    daily, monthly_delta, _ = monthly_card.activate(user, card_id, now=now_ts())
+                    daily, monthly_delta, _ = monthly_card.activate(
+                        user, card_id, now=now_ts(), platform=platform
+                    )
                     merge_delta(delta, monthly_delta)
                     granted_items.extend(daily)
+                if str(order["good_id"]).startswith("GP_"):
+                    gift_catalog.record_purchase(user, order["good_id"], 1)
+                    delta.setdefault("modified", {})["shop"] = user.get("shop", {})
                 conn.execute(
                     "UPDATE accounts SET user_json=? WHERE id=?",
                     (
@@ -472,7 +510,9 @@ def backfill_paid_order_grants(limit=1000):
             """SELECT order_id,account_id FROM orders
                WHERE status=1 AND (
                    granted=0 OR
-                   (granted=1 AND granted_items_json IS NULL AND substr(good_id,1,3)='CS_')
+                   (granted=1 AND granted_items_json IS NULL AND (
+                       substr(good_id,1,3)='CS_' OR substr(good_id,1,3)='GP_'
+                   ))
                )
                ORDER BY created_at LIMIT ?""",
             (int(limit),),
@@ -487,6 +527,40 @@ def backfill_paid_order_grants(limit=1000):
         if result.get("result") == 0:
             repaired += 1
     return repaired
+
+
+def reconcile_gift_purchase_state():
+    """Reflect paid gift orders in player.shop.GP so the client marks sold packs."""
+    updated = 0
+    with connect() as conn:
+        accounts = conn.execute("SELECT id,user_json FROM accounts").fetchall()
+        for account in accounts:
+            orders = conn.execute(
+                """SELECT good_id, COUNT(*) AS c FROM orders
+                   WHERE account_id=? AND status=1 AND good_id LIKE 'GP_%'
+                   GROUP BY good_id""",
+                (account["id"],),
+            ).fetchall()
+            if not orders:
+                continue
+            user = json.loads(account["user_json"])
+            changed = False
+            for order in orders:
+                good_id = str(order["good_id"] or "")
+                count = int(order["c"] or 0)
+                if not good_id or count <= 0:
+                    continue
+                current = gift_catalog.purchase_count(user, good_id)
+                if current < count:
+                    gift_catalog.set_purchase_count(user, good_id, count)
+                    changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE accounts SET user_json=? WHERE id=?",
+                    (json.dumps(user, ensure_ascii=False, separators=(",", ":")), account["id"]),
+                )
+                updated += 1
+    return updated
 
 
 def new_bill_id():

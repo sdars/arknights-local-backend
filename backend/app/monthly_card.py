@@ -59,7 +59,7 @@ def is_active(user, now=None):
     )
 
 
-def activate(user, card_id=None, now=None):
+def activate(user, card_id=None, now=None, platform=None):
     now = int(now or time.time())
     card_id = str(card_id or current_card_id())
     status = user.setdefault("status", {})
@@ -70,13 +70,13 @@ def activate(user, card_id=None, now=None):
     new_end = max(now, end) + DURATION_DAYS * 86400
     status["monthlySubscriptionEndTime"] = new_end
     status["tipMonthlyCardExpireTs"] = new_end
-    granted, delta = grant_daily(user, card_id, now)
+    granted, delta = grant_daily(user, card_id, now, platform=platform)
     delta.setdefault("deleted", {})
     delta.setdefault("modified", {})["status"] = status
     return granted, delta, new_end
 
 
-def grant_daily(user, card_id=None, now=None):
+def grant_daily(user, card_id=None, now=None, platform=None):
     now = int(now or time.time())
     card_id = str(card_id or current_card_id())
     if not is_active(user, now):
@@ -88,7 +88,9 @@ def grant_daily(user, card_id=None, now=None):
     items = daily_items(card_id, now)
     if not items:
         return [], grants.empty_delta()
-    granted, delta = grants.apply_items(user, items, source="monthly-card", now=now)
+    granted, delta = grants.apply_items(
+        user, items, source="monthly-card", now=now, platform=platform
+    )
     local["lastGrantDay"] = today
     local["lastGrantTs"] = now
     local["cardId"] = card_id
