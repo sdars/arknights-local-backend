@@ -231,25 +231,28 @@ def pool_detail(pool_id):
         if key and meta.get(key) is not None:
             row["totalPercent"] = _float(meta.get(key), _float(row.get("totalPercent"), 0.0))
     up_chars = [str(value) for value in meta.get("upChars") or [] if value]
-    if up_chars:
-        up_info = info.get("upCharInfo")
-        if not isinstance(up_info, dict):
-            up_info = {"perCharList": []}
-            info["upCharInfo"] = up_info
-        per = up_info.get("perCharList")
-        if not isinstance(per, list):
-            per = []
-            up_info["perCharList"] = per
+    up5_chars = [str(value) for value in meta.get("up5Chars") or [] if value]
+    # A saved admin pool always carries upChars/up5Chars, including empty
+    # lists, so an empty value means "clear the UP list" rather than "keep the
+    # base pool's list".
+    has_up_config = "upChars" in meta or "up5Chars" in meta
+    if has_up_config:
         valid = set(game_data.character_catalog())
         up_chars = [char_id for char_id in up_chars if char_id in valid]
-        for row in per:
-            rank = _int(row.get("rarityRank"), 0)
-            if rank == 5:
-                row["charIdList"] = up_chars
-                row["percent"] = _float(meta.get("upRate"), 0.5)
-        if not any(_int(row.get("rarityRank"), 0) == 5 for row in per) and up_chars:
-            per.append({"rarityRank": 5, "charIdList": up_chars, "percent": _float(meta.get("upRate"), 0.5)})
-        detail["hasRateUp"] = True
+        up5_chars = [char_id for char_id in up5_chars if char_id in valid]
+        rows = []
+        if up_chars:
+            rows.append({"rarityRank": 5, "charIdList": up_chars, "percent": _float(meta.get("upRate"), 0.5)})
+        if up5_chars:
+            rows.append(
+                {
+                    "rarityRank": 4,
+                    "charIdList": up5_chars,
+                    "percent": _float(meta.get("up5Rate"), _float(meta.get("upRate"), 0.5)),
+                }
+            )
+        info["upCharInfo"] = {"perCharList": rows} if rows else None
+        detail["hasRateUp"] = bool(rows)
     detail.setdefault("playerDataDelta", {"modified": {}, "deleted": {}})
     return detail
 

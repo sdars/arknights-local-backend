@@ -1,5 +1,7 @@
 import asyncio
+import copy
 import json
+import re
 import shutil
 import sqlite3
 import zipfile
@@ -485,6 +487,87 @@ async def gacha_page(request: Request, q: str = "", status: str = "", page: int 
     )
 
 
+GACHA_RARITY = {
+    5: {"label": "6★", "tier": "TIER_6", "avail": "avail6", "up": "up6", "rate": "rate6", "up_rate": "upRate"},
+    4: {"label": "5★", "tier": "TIER_5", "avail": "avail5", "up": "up5", "rate": "rate5", "up_rate": "up5Rate"},
+    3: {"label": "4★", "tier": "TIER_4", "avail": "avail4", "up": "", "rate": "rate4", "up_rate": ""},
+    2: {"label": "3★", "tier": "TIER_3", "avail": "avail3", "up": "", "rate": "rate3", "up_rate": ""},
+}
+GACHA_TIER_RANK = {spec["tier"]: rank for rank, spec in GACHA_RARITY.items()}
+
+
+def _gacha_character_catalog():
+    return {
+        char_id: item
+        for char_id, item in game_data.character_catalog().items()
+        if char_id.startswith("char_") and str(item.get("rarity") or "") in GACHA_TIER_RANK
+    }
+
+
+def _tier_label(tier):
+    rank = GACHA_TIER_RANK.get(str(tier or ""))
+    return GACHA_RARITY[rank]["label"] if rank else str(tier or "未知")
+
+
+def _split_character_tokens(value):
+    return [token.strip() for token in re.split(r"[,，;；\n\r\t]+", str(value or "")) if token.strip()]
+
+
+def _resolve_character_ids(value, rarity, catalog):
+    spec = GACHA_RARITY[rarity]
+    resolved = []
+    for token in _split_character_tokens(value):
+        char_id = token if token in catalog else ""
+        matches = []
+        if not char_id:
+            needle = token.lower()
+            matches = [
+                candidate_id
+                for candidate_id, item in catalog.items()
+                if needle in {
+                    str(item.get("name") or "").lower(),
+                    str(item.get("appellation") or "").lower(),
+                }
+            ]
+            if not matches:
+                matches = [
+                    candidate_id
+                    for candidate_id, item in catalog.items()
+                    if needle and needle in str(item.get("name") or "").lower()
+                ]
+            if not matches:
+                raise ValueError(f"找不到干员：{token}")
+            if len(matches) > 1:
+                sample = "、".join(matches[:6])
+                raise ValueError(f"干员名称不唯一：{token}（{sample}）")
+            char_id = matches[0]
+        item = catalog.get(char_id) or {}
+        actual_tier = str(item.get("rarity") or "")
+        if actual_tier != spec["tier"]:
+            raise ValueError(
+                f"{token}（{char_id}）是 {_tier_label(actual_tier)}，不能放进 {spec['label']} 奖池"
+            )
+        if char_id not in resolved:
+            resolved.append(char_id)
+    return resolved
+
+
+def _character_options():
+    catalog = _gacha_character_catalog()
+    options = {str(rank): [] for rank in GACHA_RARITY}
+    names = {}
+    for char_id, item in catalog.items():
+        rank = GACHA_TIER_RANK.get(str(item.get("rarity") or ""))
+        if rank is None:
+            continue
+        row = {"id": char_id, "name": str(item.get("name") or char_id)}
+        options[str(rank)].append(row)
+        names[char_id] = row["name"]
+    for rows in options.values():
+        rows.sort(key=lambda row: (row["name"], row["id"]))
+    return options, names
+
+
 def _gacha_edit_context(pool_id):
     meta = gacha_service.pool_meta(pool_id)
     if not meta:
@@ -493,19 +576,42 @@ def _gacha_edit_context(pool_id):
     info = detail.get("detailInfo") or {}
     avail = ((info.get("availCharInfo") or {}).get("perAvailList")) or []
     rates = {5: 0.02, 4: 0.08, 3: 0.5, 2: 0.4}
+    avail_by_rank = {rank: [] for rank in GACHA_RARITY}
     for row in avail:
-        rates[_int(row.get("rarityRank"), 0)] = _float(row.get("totalPercent"), 0)
-    up_chars = []
+        rank = _int(row.get("rarityRank"), 0)
+        rates[rank] = _float(row.get("totalPercent"), 0)
+        if rank in avail_by_rank:
+            avail_by_rank[rank] = [str(value) for value in row.get("charIdList") or []]
+    up_by_rank = {5: [], 4: []}
     for row in ((info.get("upCharInfo") or {}).get("perCharList") or []):
-        if _int(row.get("rarityRank"), 0) == 5:
-            up_chars = [str(value) for value in row.get("charIdList") or []]
+        rank = _int(row.get("rarityRank"), 0)
+        if rank in up_by_rank:
+            up_by_rank[rank] = [str(value) for value in row.get("charIdList") or []]
+    options, names = _character_options()
     meta["open_text"] = _format_ts(meta.get("openTime"))
     meta["end_text"] = _format_ts(meta.get("endTime"))
     meta["rate6_percent"] = round(rates.get(5, 0.02) * 100, 3)
     meta["rate5_percent"] = round(rates.get(4, 0.08) * 100, 3)
     meta["rate4_percent"] = round(rates.get(3, 0.5) * 100, 3)
     meta["rate3_percent"] = round(rates.get(2, 0.4) * 100, 3)
-    meta["up_chars_text"] = ",".join(up_chars)
+    meta["up_chars_text"] = ",".join(up_by_rank[5])
+    meta["up5_chars_text"] = ",".join(up_by_rank[4])
+    meta["up_rate6_percent"] = round(_float(meta.get("upRate"), 0.5) * 100, 1)
+    meta["up_rate5_percent"] = round(_float(meta.get("up5Rate"), _float(meta.get("upRate"), 0.5)) * 100, 1)
+    meta["avail_text"] = {str(rank): "\n".join(avail_by_rank[rank]) for rank in GACHA_RARITY}
+    meta["up_text"] = {str(rank): "\n".join(up_by_rank.get(rank, [])) for rank in (5, 4)}
+    meta["avail_counts"] = {str(rank): len(avail_by_rank[rank]) for rank in GACHA_RARITY}
+    meta["up_counts"] = {str(rank): len(up_by_rank.get(rank, [])) for rank in (5, 4)}
+    meta["char_options"] = options
+    meta["char_names"] = names
+    meta["avail_preview"] = {
+        str(rank): [{"id": char_id, "name": names.get(char_id, char_id)} for char_id in avail_by_rank[rank]]
+        for rank in GACHA_RARITY
+    }
+    meta["up_preview"] = {
+        str(rank): [{"id": char_id, "name": names.get(char_id, char_id)} for char_id in up_by_rank[rank]]
+        for rank in (5, 4)
+    }
     return meta
 
 
@@ -531,6 +637,49 @@ async def gacha_edit_page(pool_id: str, request: Request):
 
 
 def _gacha_form_values(form, pool_id):
+    exists = bool(gacha_service.pool_meta(pool_id))
+    base_pool = str(form.get("base_pool") or "").strip()
+    reference_id = pool_id if exists else base_pool
+    reference_detail = (
+        gacha_service.pool_detail(reference_id)
+        if reference_id and gacha_service.pool_meta(reference_id)
+        else {}
+    )
+    reference_up = {5: [], 4: []}
+    reference_up_rate = {5: 0.5, 4: 0.5}
+    for row in ((reference_detail.get("detailInfo") or {}).get("upCharInfo") or {}).get("perCharList") or []:
+        rank = _int(row.get("rarityRank"), 0)
+        if rank in reference_up:
+            reference_up[rank] = [str(value) for value in row.get("charIdList") or []]
+            reference_up_rate[rank] = max(0.0, min(1.0, _float(row.get("percent"), 0.5)))
+
+    def parse_chars(value):
+        return [
+            item.strip()
+            for item in str(value or "").replace("\n", ",").split(",")
+            if item.strip()
+        ]
+
+    raw_up_chars = form.get("up_chars")
+    up_chars = (
+        reference_up[5]
+        if raw_up_chars is None or (not exists and not str(raw_up_chars).strip())
+        else parse_chars(raw_up_chars)
+    )
+    raw_up_rate = form.get("up_rate_percent")
+    up_rate = (
+        reference_up_rate[5]
+        if raw_up_rate is None or (not exists and not str(raw_up_rate).strip())
+        else max(0.0, min(1.0, _float(raw_up_rate, 50.0) / 100.0))
+    )
+    raw_up5_chars = form.get("up5_chars")
+    up5_chars = reference_up[4] if raw_up5_chars is None else parse_chars(raw_up5_chars)
+    raw_up5_rate = form.get("up5_rate_percent")
+    up5_rate = (
+        reference_up_rate[4]
+        if raw_up5_rate is None
+        else max(0.0, min(1.0, _float(raw_up5_rate, 50.0) / 100.0))
+    )
     values = {
         "gachaPoolName": str(form.get("name") or pool_id),
         "enabled": str(form.get("enabled") or "1") == "1",
@@ -538,20 +687,84 @@ def _gacha_form_values(form, pool_id):
         "endTime": _parse_ts(form.get("end_time")),
         "singlePrice": max(0, _int(form.get("single_price"), 600)),
         "tenPrice": max(0, _int(form.get("ten_price"), 6000)),
-        "upChars": [value.strip() for value in str(form.get("up_chars") or "").replace("\n", ",").split(",") if value.strip()],
-        "upRate": max(0.0, min(1.0, _float(form.get("up_rate_percent"), 50.0) / 100.0)),
+        "upChars": up_chars,
+        "upRate": up_rate,
+        "up5Chars": up5_chars,
+        "up5Rate": up5_rate,
         "rate6": max(0.0, _float(form.get("rate6_percent"), 2.0) / 100.0),
         "rate5": max(0.0, _float(form.get("rate5_percent"), 8.0) / 100.0),
         "rate4": max(0.0, _float(form.get("rate4_percent"), 50.0) / 100.0),
         "rate3": max(0.0, _float(form.get("rate3_percent"), 40.0) / 100.0),
         "guarantee5Avail": 1 if str(form.get("guarantee5")) == "1" else 0,
         "guarantee5Count": max(1, _int(form.get("guarantee5_count"), 10)),
-        "basePool": str(form.get("base_pool") or "").strip(),
+        "basePool": base_pool,
     }
     rate_total = values["rate6"] + values["rate5"] + values["rate4"] + values["rate3"]
     if abs(rate_total - 1.0) > 0.0001:
         raise ValueError(f"四项概率合计必须为 100%，当前为 {rate_total * 100:.3f}%")
     return values
+
+
+def _save_gacha_prize_pool(pool_id, form):
+    meta = gacha_service.pool_meta(pool_id)
+    if not meta:
+        raise ValueError("卡池不存在")
+    catalog = _gacha_character_catalog()
+    avail = {
+        rank: _resolve_character_ids(form.get(spec["avail"]), rank, catalog)
+        for rank, spec in GACHA_RARITY.items()
+    }
+    rates = {
+        5: _float(meta.get("rate6"), 0.02),
+        4: _float(meta.get("rate5"), 0.08),
+        3: _float(meta.get("rate4"), 0.5),
+        2: _float(meta.get("rate3"), 0.4),
+    }
+    for rank, spec in GACHA_RARITY.items():
+        if rates[rank] > 0 and not avail[rank]:
+            raise ValueError(f"{spec['label']} 概率大于 0，奖池不能为空")
+    up = {
+        rank: _resolve_character_ids(form.get(GACHA_RARITY[rank]["up"]), rank, catalog)
+        for rank in (5, 4)
+    }
+    for rank in (5, 4):
+        for char_id in up[rank]:
+            if char_id not in avail[rank]:
+                avail[rank].append(char_id)
+    up_rate6 = max(0.0, min(100.0, _float(form.get("up6_rate_percent"), _float(meta.get("upRate"), 0.5) * 100))) / 100.0
+    up_rate5 = max(0.0, min(100.0, _float(form.get("up5_rate_percent"), _float(meta.get("up5Rate", meta.get("upRate")), 0.5) * 100))) / 100.0
+    detail = copy.deepcopy(gacha_service.pool_detail(pool_id) or {})
+    info = detail.setdefault("detailInfo", {})
+    info["availCharInfo"] = {
+        "perAvailList": [
+            {
+                "rarityRank": rank,
+                "charIdList": avail[rank],
+                "totalPercent": rates[rank],
+            }
+            for rank, _ in GACHA_RARITY.items()
+        ]
+    }
+    up_rows = []
+    if up[5]:
+        up_rows.append({"rarityRank": 5, "charIdList": up[5], "percent": up_rate6})
+    if up[4]:
+        up_rows.append({"rarityRank": 4, "charIdList": up[4], "percent": up_rate5})
+    info["upCharInfo"] = {"perCharList": up_rows} if up_rows else None
+    detail["hasRateUp"] = bool(up_rows)
+    detail.setdefault("gachaObjGroupType", 0)
+    detail.setdefault("playerDataDelta", {"modified": {}, "deleted": {}})
+    gacha_service.save_pool(
+        pool_id,
+        {
+            "detail": detail,
+            "upChars": up[5],
+            "upRate": up_rate6,
+            "up5Chars": up[4],
+            "up5Rate": up_rate5,
+        },
+    )
+    return avail, up
 
 
 @router.post("/gacha/create")
@@ -584,6 +797,25 @@ async def gacha_update(pool_id: str, request: Request):
         values = _gacha_form_values(form, pool_id)
         gacha_service.save_pool(pool_id, values)
         _flash(request, f"卡池 {pool_id} 已保存")
+    except ValueError as exc:
+        _flash(request, str(exc))
+    return RedirectResponse(f"/admin/gacha/{pool_id}", status_code=303)
+
+
+@router.post("/gacha/{pool_id}/pool")
+async def gacha_pool_update(pool_id: str, request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    try:
+        avail, up = _save_gacha_prize_pool(pool_id, form)
+        _flash(
+            request,
+            "奖池已保存：6★ {0} / 5★ {1} / 4★ {2} / 3★ {3}；UP 6★ {4} / 5★ {5}".format(
+                len(avail[5]), len(avail[4]), len(avail[3]), len(avail[2]), len(up[5]), len(up[4])
+            ),
+        )
     except ValueError as exc:
         _flash(request, str(exc))
     return RedirectResponse(f"/admin/gacha/{pool_id}", status_code=303)

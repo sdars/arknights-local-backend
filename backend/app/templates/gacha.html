@@ -6,7 +6,7 @@
   <div>
     <p class="eyebrow">GACHA CONTROL</p>
     <h1>寻访管理</h1>
-    <p class="muted">共 {{ total }} 个卡池。可修改概率、价格、保底、UP 干员与开放时间，也可以基于现有卡池上线新卡池。</p>
+    <p class="muted">共 {{ total }} 个卡池。可修改概率、价格、保底、UP 干员与开放时间，也可以新建卡池并逐稀有度配置奖池干员。</p>
   </div>
 </header>
 
@@ -17,12 +17,13 @@
   <form class="form-grid" method="post" action="/admin/gacha/create">
     <label>卡池 ID<input class="mono" name="pool_id" placeholder="NORM_CUSTOM_1" required></label>
     <label>名称<input name="name" placeholder="自定义寻访" required></label>
-    <label>基础卡池<input class="mono" name="base_pool" value="NORM_79_0_3" required></label>
+    <label>基础卡池（可选）<input class="mono" name="base_pool" value="NORM_79_0_3" placeholder="留空则从零创建"></label>
     <label>开放时间<input type="datetime-local" name="open_time"></label>
     <label>结束时间<input type="datetime-local" name="end_time"></label>
     <label>单抽价格（合成玉）<input type="number" name="single_price" value="600" min="0"></label>
     <label>十连价格（合成玉）<input type="number" name="ten_price" value="6000" min="0"></label>
     <label class="span-all">UP 干员 ID（逗号分隔）<input class="mono" name="up_chars" placeholder="char_103_angel,char_112_siege"></label>
+    <p class="muted small-note span-all">创建后进入详情页，可分别设置 6★ / 5★ / 4★ / 3★ 奖池、双档 UP 干员与概率。</p>
     <div class="actions span-all"><button class="primary" type="submit">上线新卡池</button></div>
   </form>
 </section>
