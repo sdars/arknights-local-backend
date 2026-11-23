@@ -1517,8 +1517,24 @@ async def gacha_get_free_char():
 
 
 @router.post("/gacha/choosePoolUp")
-async def gacha_choose_pool_up():
-    return {"result": 0, **empty_delta()}
+async def gacha_choose_pool_up(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    result = gacha_service.choose_pool_up(
+        user,
+        body.get("poolId"),
+        body.get("chooseChar") or {},
+    )
+    if result.get("result") == 0:
+        save_player(account, user)
+    logger.info("gacha choosePoolUp uid=%s body=%s result=%s", account.get("uid"), body, result.get("result"))
+    return result
 
 
 async def _shop_buy(request, shop_key):

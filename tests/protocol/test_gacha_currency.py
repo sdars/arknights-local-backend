@@ -196,6 +196,99 @@ def test_gacha_state_repairs_negative_guarantee_counter():
     assert node["avail"] is False
 
 
+def test_new_double_pool_is_loaded_and_has_client_detail():
+    meta = gacha_service.pool_meta("DOUBLE_79_0_5")
+    assert meta["gachaRuleType"] == "DOUBLE"
+    assert meta["singlePrice"] == 600
+    assert meta["tenPrice"] == 6000
+    detail = gacha_service.pool_detail("DOUBLE_79_0_5")
+    assert detail and detail["hasRateUp"] is True
+    assert any(row["rarityRank"] == 5 and len(row["charIdList"]) >= 4 for row in detail["detailInfo"]["availCharInfo"]["perAvailList"])
+
+
+def test_double_pool_ten_pull_uses_combined_ory_and_writes_double_state():
+    user = copy.deepcopy(_template())
+    user["status"]["diamondShard"] = 6080
+    result = gacha_service.draw(
+        user,
+        "DOUBLE_79_0_5",
+        count=10,
+        use_tkt=9,
+        item_list=[{"id": "4003", "count": 6000}],
+    )
+    assert result["result"] == 0, result
+    assert user["status"]["diamondShard"] == 80
+    assert len(result["gachaResultList"]) == 10
+    node = user["gacha"]["double"]["DOUBLE_79_0_5"]
+    assert node["showCnt"] == 10
+    assert node["hitCharState"] == 0
+    assert "DOUBLE_79_0_5" not in user["gacha"]["normal"]
+
+
+def test_choose_pool_up_records_both_double_selections():
+    user = copy.deepcopy(_template())
+    result = gacha_service.choose_pool_up(
+        user,
+        "DOUBLE_79_0_5",
+        {"0": ["char_4027_heyak"], "1": ["char_4138_narant"]},
+    )
+    assert result["result"] == 0, result
+    node = user["gacha"]["double"]["DOUBLE_79_0_5"]
+    assert node["hitCharIds"] == {"1": "char_4027_heyak", "2": "char_4138_narant"}
+    assert node["hitCharId"] == "char_4027_heyak"
+
+
+def test_single_pull_does_not_use_the_ten_pull_five_star_guarantee():
+    pool_id = "TEST_SINGLE_GUARANTEE"
+    gacha_service.save_pool(
+        pool_id,
+        {
+            "gachaPoolName": "单抽保底回归测试",
+            "rate6": 0,
+            "rate5": 0,
+            "rate4": 0,
+            "rate3": 1,
+            "guarantee5Avail": 1,
+            "guarantee5Count": 10,
+            "singlePrice": 600,
+        },
+        create=True,
+    )
+    try:
+        user = copy.deepcopy(_template())
+        user["status"]["diamondShard"] = 600
+        result = gacha_service.draw(user, pool_id, count=1, use_tkt=0)
+        assert result["result"] == 0, result
+        assert result["charGet"]["rarity"] == 2
+    finally:
+        gacha_service.delete_pool(pool_id)
+
+
+def test_gacha_state_uses_rule_specific_client_buckets():
+    user = copy.deepcopy(_template())
+    gacha_service._pool_state(user, "LIMITED_79_0_1", 10, results=[])
+    assert "LIMITED_79_0_1" in user["gacha"]["limit"]
+    assert user["gacha"]["limit"]["LIMITED_79_0_1"]["poolCnt"] == 10
+    assert "LIMITED_79_0_1" not in user["gacha"]["normal"]
+
+    gacha_service._pool_state(user, "SINGLE_78_0_1", 1, results=[])
+    assert "SINGLE_78_0_1" in user["gacha"]["single"]
+    assert "SINGLE_78_0_1" not in user["gacha"]["normal"]
+
+    gacha_service._pool_state(user, "FESCLASSIC_79_0_1", 1, results=[])
+    assert "FESCLASSIC_79_0_1" in user["gacha"]["fesClassic"]
+    assert "FESCLASSIC_79_0_1" not in user["gacha"]["normal"]
+
+
+def test_gacha_state_migrates_legacy_attain_character_counters():
+    user = copy.deepcopy(_template())
+    user["gacha"]["attain"] = {"char_289_gyuki": 5, "ATTAIN_57_0_4": {"attain6Count": 2}}
+    gacha_service.ensure_gacha_state(user)
+    assert "char_289_gyuki" not in user["gacha"]["attain"]
+    assert user["gacha"]["attain"]["ATTAIN_57_0_4"] == {"attain6Count": 2}
+    assert user["exgachadata"]["attainChars"]["char_289_gyuki"] == 5
+
+
 def test_exchange_diamond_shard_uses_account_platform(client, login, test_account):
     _admin_login(client)
     uid = int(test_account["uid"])

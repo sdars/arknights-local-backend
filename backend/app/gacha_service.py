@@ -12,6 +12,8 @@ from .config import BASE_DIR, DATA_DIR
 
 ROOT_DIR = BASE_DIR.parent
 POOL_DIR = ROOT_DIR / "server" / "data" / "gacha"
+EXTRA_POOL_DIR = DATA_DIR / "gacha_details"
+EXTRA_POOL_PATH = DATA_DIR / "gacha_pool_extras.json"
 OVERRIDE_PATH = DATA_DIR / "gacha_overrides.json"
 _lock = threading.Lock()
 _cache = {}
@@ -68,9 +70,29 @@ def _save_overrides(data):
     OVERRIDE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _extra_pool_rows():
+    """New client pools that may not exist in the installed static table yet.
+
+    ``server/data`` is runtime data and is not tracked by git.  Keeping a
+    small overlay in ``backend/data`` means a fresh deployment still knows
+    about pools shipped by a newer client resource version.
+    """
+    stamp = _mtime(EXTRA_POOL_PATH)
+    with _lock:
+        cached = _cache.get("extra_pools")
+        if cached and cached[0] == stamp:
+            return copy.deepcopy(cached[1])
+        payload = _load_json(EXTRA_POOL_PATH, {"gachaPoolClient": []})
+        rows = payload.get("gachaPoolClient") if isinstance(payload, dict) else []
+        rows = [copy.deepcopy(row) for row in (rows or []) if isinstance(row, dict) and row.get("gachaPoolId")]
+        _cache["extra_pools"] = (stamp, rows)
+        return copy.deepcopy(rows)
+
+
 def _base_pools():
     table = game_data.excel("gacha_table.json") or {}
     rows = []
+    seen = set()
     for key in ("gachaPoolClient", "newbeeGachaPoolClient"):
         for row in table.get(key) or []:
             if not isinstance(row, dict) or not row.get("gachaPoolId"):
@@ -78,6 +100,22 @@ def _base_pools():
             item = copy.deepcopy(row)
             item["source"] = "newbee" if key == "newbeeGachaPoolClient" else "normal"
             rows.append(item)
+            seen.add(str(item["gachaPoolId"]))
+    # A newer client can expose pools that are absent from the installed
+    # resource table.  Overlay rows take precedence, but never duplicate a
+    # pool id.
+    for row in _extra_pool_rows():
+        item = copy.deepcopy(row)
+        item["source"] = "normal"
+        pool_id = str(item["gachaPoolId"])
+        if pool_id in seen:
+            for index, existing in enumerate(rows):
+                if str(existing.get("gachaPoolId")) == pool_id:
+                    rows[index] = item
+                    break
+        else:
+            rows.append(item)
+            seen.add(pool_id)
     return rows
 
 
@@ -169,6 +207,7 @@ def _new_pool_detail(pool_id, meta):
         if rank in by_rank:
             by_rank[rank].append(char_id)
     up_chars = [str(value) for value in meta.get("upChars") or [] if value]
+    up5_chars = [str(value) for value in meta.get("up5Chars") or [] if value]
     avail = []
     for rank in RARITY_ORDER:
         pool = list(by_rank.get(rank) or [])
@@ -176,10 +215,23 @@ def _new_pool_detail(pool_id, meta):
             continue
         avail.append({"rarityRank": rank, "charIdList": pool, "totalPercent": rates[rank] / total})
     up = []
-    for rank in (5, 4):
-        ids = [char_id for char_id in up_chars if char_id in by_rank.get(rank, [])]
+    for rank, candidates, rate_key in (
+        (5, up_chars, "upRate"),
+        (4, up5_chars, "up5Rate"),
+    ):
+        ids = [char_id for char_id in candidates if char_id in by_rank.get(rank, [])]
         if ids:
-            up.append({"rarityRank": rank, "charIdList": ids, "percent": _float(meta.get("upRate"), 0.5)})
+            up.append(
+                {
+                    "rarityRank": rank,
+                    "charIdList": ids,
+                    "percent": _float(meta.get(rate_key), _float(meta.get("upRate"), 0.5)),
+                }
+            )
+    # ``rateUp`` lets a pool show its featured operators without applying a
+    # separate weight-up (some event pools list the selectable operators only).
+    # The admin editor uses the same flag for custom pools.
+    rate_up = bool(up) if meta.get("rateUp") is None else bool(meta.get("rateUp"))
     return {
         "detailInfo": {
             "availCharInfo": {"perAvailList": avail},
@@ -193,7 +245,7 @@ def _new_pool_detail(pool_id, meta):
             ],
         },
         "gachaObjGroupType": 0,
-        "hasRateUp": bool(up),
+        "hasRateUp": rate_up,
         "playerDataDelta": {"modified": {}, "deleted": {}},
     }
 
@@ -207,10 +259,14 @@ def pool_detail(pool_id):
         detail = copy.deepcopy(custom)
     else:
         path = POOL_DIR / f"{pool_id}.json"
+        if not path.exists():
+            path = EXTRA_POOL_DIR / f"{pool_id}.json"
         if path.exists():
             detail = _load_json(path, {})
         elif meta.get("basePool"):
             source = POOL_DIR / f"{meta['basePool']}.json"
+            if not source.exists():
+                source = EXTRA_POOL_DIR / f"{meta['basePool']}.json"
             detail = _load_json(source, {})
         else:
             detail = {}
@@ -252,7 +308,9 @@ def pool_detail(pool_id):
                 }
             )
         info["upCharInfo"] = {"perCharList": rows} if rows else None
-        detail["hasRateUp"] = bool(rows)
+        detail["hasRateUp"] = bool(rows) if meta.get("rateUp") is None else bool(meta.get("rateUp"))
+    elif meta.get("rateUp") is not None:
+        detail["hasRateUp"] = bool(meta.get("rateUp"))
     detail.setdefault("playerDataDelta", {"modified": {}, "deleted": {}})
     return detail
 
@@ -295,6 +353,10 @@ def delete_pool(pool_id):
     return True
 
 
+def _pool_rule(pool_id):
+    return str((pool_meta(pool_id) or {}).get("gachaRuleType") or "")
+
+
 def _ensure_gacha(user):
     gacha = user.setdefault("gacha", {})
     for key in ("normal", "limit", "single", "special", "fesClassic", "attain", "linkage", "double", "backflow"):
@@ -311,6 +373,73 @@ def _ensure_gacha(user):
 def ensure_gacha_state(user):
     """Give the client every PlayerGacha dictionary it deserializes."""
     gacha = _ensure_gacha(user)
+    double_bucket = gacha.setdefault("double", {})
+    normal_bucket = gacha.get("normal")
+    if isinstance(normal_bucket, dict):
+        for pool_id in list(normal_bucket):
+            if _pool_rule(pool_id) not in ("DOUBLE", "CLASSIC_DOUBLE"):
+                continue
+            old = normal_bucket.pop(pool_id, None)
+            if isinstance(old, dict) and pool_id not in double_bucket:
+                double_bucket[pool_id] = {
+                    "showCnt": max(0, _int(old.get("showCnt"), _int(old.get("cnt"), 0))),
+                    "hitCharState": 0,
+                    "hitCharId": "",
+                }
+    for pool_id, node in list(double_bucket.items()):
+        if not isinstance(node, dict):
+            double_bucket[pool_id] = {"showCnt": 0, "hitCharState": 0, "hitCharId": ""}
+            continue
+        node["showCnt"] = max(0, _int(node.get("showCnt"), 0))
+        state = _int(node.get("hitCharState"), 0)
+        node["hitCharState"] = state if state in (0, 1, 2) else 0
+        node["hitCharId"] = str(node.get("hitCharId") or "")
+    # Older server builds used ``gacha.attain`` as a character-id counter.
+    # The client schema is Dictionary<poolId, {attain6Count}>; leaving the
+    # integer values there breaks PlayerGacha deserialization and can make the
+    # whole recruit page unavailable.  Preserve the old counters privately.
+    attain_bucket = gacha.get("attain")
+    if isinstance(attain_bucket, dict):
+        legacy = user.setdefault("exgachadata", {}).setdefault("attainChars", {})
+        if not isinstance(legacy, dict):
+            legacy = {}
+            user["exgachadata"]["attainChars"] = legacy
+        for key, node in list(attain_bucket.items()):
+            if isinstance(node, int):
+                legacy[str(key)] = _int(legacy.get(str(key)), 0) + max(0, node)
+                attain_bucket.pop(key, None)
+            elif not isinstance(node, dict):
+                attain_bucket.pop(key, None)
+            else:
+                node["attain6Count"] = max(0, _int(node.get("attain6Count"), 0))
+    single_bucket = gacha.get("single")
+    if isinstance(single_bucket, dict):
+        for node in single_bucket.values():
+            if not isinstance(node, dict):
+                continue
+            node["maxCnt"] = max(1, _int(node.get("maxCnt"), 10))
+            node["cnt"] = max(0, min(_int(node.get("cnt"), 0), node["maxCnt"] - 1))
+            node["avail"] = bool(node.get("avail", True))
+            node["singleEnsureCnt"] = max(0, _int(node.get("singleEnsureCnt"), 0))
+            node["singleEnsureUse"] = bool(node.get("singleEnsureUse", False))
+            node["singleEnsureChar"] = str(node.get("singleEnsureChar") or "")
+    limit_bucket = gacha.get("limit")
+    if isinstance(limit_bucket, dict):
+        for node in limit_bucket.values():
+            if not isinstance(node, dict):
+                continue
+            node["leastFree"] = max(0, _int(node.get("leastFree"), 0))
+            node["poolCnt"] = max(0, _int(node.get("poolCnt"), 0))
+            node["recruitedFreeChar"] = bool(node.get("recruitedFreeChar", False))
+    for family in ("fesClassic", "special", "backflow"):
+        bucket = gacha.get(family)
+        if not isinstance(bucket, dict):
+            continue
+        for pool_id, node in bucket.items():
+            if not isinstance(node, dict):
+                bucket[pool_id] = {"upChar": {}}
+            elif not isinstance(node.get("upChar"), dict):
+                node["upChar"] = {}
     # Repair the old cumulative counter bug.  The client renders this field as
     # ``maxCnt - cnt`` ("N pulls until a 5-star"); values >= maxCnt therefore
     # overflow into negative UI such as "-10次内".
@@ -661,27 +790,54 @@ def _grant_character(user, char_id, rarity, now):
 def _pool_state(user, pool_id, count, results=None):
     gacha = _ensure_gacha(user)
     pool_id = str(pool_id or "")
-    family = "limit" if pool_id.startswith("LIMITED") else ("newbee" if pool_id.startswith("BOOT") else "normal")
-    if family == "newbee":
+    meta = pool_meta(pool_id)
+    rule = str(meta.get("gachaRuleType") or "")
+    if rule == "BOOT" or pool_id.startswith("BOOT"):
         node = gacha["newbee"]
         node["cnt"] = max(0, _int(node.get("cnt"), 21) - count)
         node.setdefault("poolId", pool_id)
         node["openFlag"] = 1
-    else:
-        bucket = gacha.setdefault(family, {})
+        return gacha
+    if rule in ("DOUBLE", "CLASSIC_DOUBLE"):
+        bucket = gacha.setdefault("double", {})
         node = bucket.get(pool_id)
         if not isinstance(node, dict):
-            node = {"rarity": 4, "maxCnt": 10, "avail": True, "cnt": 0}
+            node = {"showCnt": 0, "hitCharState": 0, "hitCharId": ""}
             bucket[pool_id] = node
-        meta = pool_meta(pool_id)
+        node["showCnt"] = max(0, _int(node.get("showCnt"), 0)) + count
+        state = _int(node.get("hitCharState"), 0)
+        node["hitCharState"] = state if state in (0, 1, 2) else 0
+        node["hitCharId"] = str(node.get("hitCharId") or "")
+        return gacha
+    if rule == "LIMITED" or pool_id.startswith("LIMITED"):
+        bucket = gacha.setdefault("limit", {})
+        node = bucket.get(pool_id)
+        if not isinstance(node, dict):
+            node = {"leastFree": 0, "poolCnt": 0, "recruitedFreeChar": False}
+            bucket[pool_id] = node
+        node["leastFree"] = max(0, _int(node.get("leastFree"), 0))
+        node["poolCnt"] = max(0, _int(node.get("poolCnt"), 0)) + count
+        node["recruitedFreeChar"] = bool(node.get("recruitedFreeChar", False))
+        return gacha
+    if rule == "SINGLE":
+        bucket = gacha.setdefault("single", {})
+        node = bucket.get(pool_id)
+        if not isinstance(node, dict):
+            node = {
+                "cnt": 0,
+                "maxCnt": 10,
+                "avail": True,
+                "singleEnsureCnt": 0,
+                "singleEnsureUse": False,
+                "singleEnsureChar": "",
+            }
+            bucket[pool_id] = node
         max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
         available = bool(_int(meta.get("guarantee5Avail"), 0)) and bool(node.get("avail", True))
         cnt = max(0, min(_int(node.get("cnt"), 0), max_cnt - 1)) if available else 0
         if available and results:
             for row in results:
                 if _int(row.get("rarity"), 0) >= 4:
-                    # Any 5/6-star consumes the one-time "within ten"
-                    # guarantee and resets the client counter.
                     available = False
                     cnt = 0
                     break
@@ -689,10 +845,83 @@ def _pool_state(user, pool_id, count, results=None):
             if cnt >= max_cnt:
                 available = False
                 cnt = 0
-        node["cnt"] = cnt
-        node["avail"] = available
-        node["maxCnt"] = max_cnt
-        node.setdefault("rarity", 4)
+        node.update(
+            {
+                "cnt": cnt,
+                "avail": available,
+                "maxCnt": max_cnt,
+                "singleEnsureCnt": max(0, _int(node.get("singleEnsureCnt"), 0)),
+                "singleEnsureUse": bool(node.get("singleEnsureUse", False)),
+                "singleEnsureChar": str(node.get("singleEnsureChar") or ""),
+            }
+        )
+        return gacha
+    if rule in ("ATTAIN", "CLASSIC_ATTAIN"):
+        bucket = gacha.setdefault("attain", {})
+        node = bucket.get(pool_id)
+        if not isinstance(node, dict):
+            node = {"attain6Count": 0}
+            bucket[pool_id] = node
+        six_stars = sum(1 for row in (results or []) if _int(row.get("rarity"), 0) == 5)
+        node["attain6Count"] = max(0, _int(node.get("attain6Count"), 0)) + six_stars
+        return gacha
+    if rule == "FESCLASSIC":
+        bucket = gacha.setdefault("fesClassic", {})
+        node = bucket.get(pool_id)
+        if not isinstance(node, dict):
+            node = {"upChar": {}}
+            bucket[pool_id] = node
+        if not isinstance(node.get("upChar"), dict):
+            node["upChar"] = {}
+        return gacha
+    if rule == "SPECIAL":
+        bucket = gacha.setdefault("special", {})
+        node = bucket.get(pool_id)
+        if not isinstance(node, dict):
+            node = {"upChar": {}}
+            bucket[pool_id] = node
+        if not isinstance(node.get("upChar"), dict):
+            node["upChar"] = {}
+        return gacha
+    if rule == "BACKFLOW":
+        bucket = gacha.setdefault("backflow", {})
+        node = bucket.get(pool_id)
+        if not isinstance(node, dict):
+            node = {"upChar": {}}
+            bucket[pool_id] = node
+        if not isinstance(node.get("upChar"), dict):
+            node["upChar"] = {}
+        return gacha
+    if rule == "LINKAGE":
+        bucket = gacha.setdefault("linkage", {})
+        if not isinstance(bucket.get(pool_id), dict):
+            bucket[pool_id] = {}
+        return gacha
+    # NORMAL / CLASSIC / GACHAWITHSPECIFIED6 share the ordinary pool state.
+    bucket = gacha.setdefault("normal", {})
+    node = bucket.get(pool_id)
+    if not isinstance(node, dict):
+        node = {"rarity": 4, "maxCnt": 10, "avail": True, "cnt": 0}
+        bucket[pool_id] = node
+    max_cnt = max(1, _int(meta.get("guarantee5Count"), 10))
+    available = bool(_int(meta.get("guarantee5Avail"), 0)) and bool(node.get("avail", True))
+    cnt = max(0, min(_int(node.get("cnt"), 0), max_cnt - 1)) if available else 0
+    if available and results:
+        for row in results:
+            if _int(row.get("rarity"), 0) >= 4:
+                # Any 5/6-star consumes the one-time "within ten"
+                # guarantee and resets the client counter.
+                available = False
+                cnt = 0
+                break
+            cnt += 1
+        if cnt >= max_cnt:
+            available = False
+            cnt = 0
+    node["cnt"] = cnt
+    node["avail"] = available
+    node["maxCnt"] = max_cnt
+    node.setdefault("rarity", 4)
     return gacha
 
 
@@ -727,13 +956,31 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None
     if charge_error:
         return charge_error
     user = working
+    rule = str(meta.get("gachaRuleType") or "")
+    double_node = None
+    double_base_show = 0
+    if rule in ("DOUBLE", "CLASSIC_DOUBLE"):
+        double_bucket = user.setdefault("gacha", {}).setdefault("double", {})
+        double_node = double_bucket.get(str(pool_id))
+        if not isinstance(double_node, dict):
+            double_node = {"showCnt": 0, "hitCharState": 0, "hitCharId": ""}
+            double_bucket[str(pool_id)] = double_node
+        double_node["hitCharState"] = _int(double_node.get("hitCharState"), 0)
+        double_node["hitCharId"] = str(double_node.get("hitCharId") or "")
+        double_base_show = max(0, _int(double_node.get("showCnt"), 0))
     ex = user.setdefault("exgachadata", {})
     pity_key = _pity_key(pool_id)
     pity = _int(ex.get(pity_key), 0)
     rates, _ = _rarity_rates(detail, pity)
     results = []
     hit_high = False
-    guarantee_at = max(0, min(count - 1, _int(meta.get("guarantee5Count"), count) - 1))
+    # A ten-pull guarantees at least one 5-star.  A single pull must not be
+    # promoted: the old formula made every single pull on a pool with
+    # ``guarantee5Avail`` return a 5-star.
+    guarantee_at = -1
+    if count >= 10 and _int(meta.get("guarantee5Avail"), 0):
+        guarantee_at = min(count - 1, max(0, _int(meta.get("guarantee5Count"), 10) - 1))
+    detail_has_rate_up = bool(detail.get("hasRateUp", True))
     for index in range(count):
         rarity = _pick_rarity(rates)
         if index == guarantee_at and not hit_high and _int(meta.get("guarantee5Avail"), 0):
@@ -748,7 +995,28 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None
         if not chars:
             chars, _ = _detail_chars(detail, 2)
         up, up_rate = _up_chars(detail, rarity)
-        if up and random.random() < up_rate:
+        forced_char_id = ""
+        if double_node is not None and rarity == 5:
+            total = double_base_show + index + 1
+            state = _int(double_node.get("hitCharState"), 0)
+            chosen = double_node.get("hitCharIds") or {}
+            if state == 0 and total >= 150:
+                forced_char_id = str(chosen.get("1") or double_node.get("hitCharId") or "")
+                if forced_char_id not in chars:
+                    forced_char_id = random.choice(up or chars) if (up or chars) else ""
+                if forced_char_id:
+                    double_node["hitCharState"] = 1
+                    double_node["hitCharId"] = forced_char_id
+            elif state == 1 and total >= 300:
+                forced_char_id = str(chosen.get("2") or double_node.get("hitCharId") or "")
+                if forced_char_id not in chars:
+                    forced_char_id = random.choice(up or chars) if (up or chars) else ""
+                if forced_char_id:
+                    double_node["hitCharState"] = 2
+                    double_node["hitCharId"] = forced_char_id
+        if forced_char_id:
+            char_id = forced_char_id
+        elif detail_has_rate_up and up and random.random() < up_rate:
             char_id = random.choice(up)
         else:
             char_id = random.choice(chars) if chars else "char_123_fang"
@@ -764,10 +1032,6 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None
         )
     ex[pity_key] = pity
     gacha = _pool_state(user, pool_id, count, results=results)
-    attain = gacha.setdefault("attain", {})
-    for row in results:
-        char_id = str(row["charId"])
-        attain[char_id] = _int(attain.get(char_id), 0) + 1
     delta = {
         "deleted": {},
         "modified": {
@@ -787,6 +1051,63 @@ def draw(user, pool_id, count=1, use_tkt=0, item_id="", item_list=None, now=None
     else:
         response["gachaResultList"] = results
     return response
+
+
+def choose_pool_up(user, pool_id, choose_char):
+    """Persist the 150/300-pull selector used by DOUBLE pools."""
+    pool_id = str(pool_id or "")
+    meta = pool_meta(pool_id)
+    if not meta or str(meta.get("gachaRuleType") or "") not in ("DOUBLE", "CLASSIC_DOUBLE"):
+        return _error(5771, "卡池不存在或不是选调卡池")
+    detail = pool_detail(pool_id)
+    if not detail:
+        return _error(5771, "卡池详情不可用")
+    featured, _ = _up_chars(detail, 5)
+    available, _ = _detail_chars(detail, 5)
+    valid = set(featured or available)
+    if not valid:
+        return _error(5771, "卡池没有可选六星干员")
+    gacha = _ensure_gacha(user)
+    bucket = gacha.setdefault("double", {})
+    node = bucket.get(pool_id)
+    if not isinstance(node, dict):
+        node = {"showCnt": 0, "hitCharState": 0, "hitCharId": ""}
+        bucket[pool_id] = node
+    chosen = node.get("hitCharIds")
+    if not isinstance(chosen, dict):
+        chosen = {}
+    state = _int(node.get("hitCharState"), 0)
+    for raw_key, raw_value in (choose_char or {}).items():
+        try:
+            index = int(raw_key)
+        except (TypeError, ValueError):
+            continue
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        char_id = str(values[0]) if values else ""
+        if not char_id:
+            continue
+        if char_id not in valid:
+            return _error(5771, f"干员 {char_id} 不在本期选调范围")
+        if index == 0:
+            stage = "1"
+        elif index == 1:
+            stage = "1" if state == 0 and "1" not in chosen else "2"
+        else:
+            stage = "2"
+        chosen[stage] = char_id
+    if not chosen:
+        return _error(5771, "没有提交有效的选调干员")
+    node["hitCharIds"] = chosen
+    if state >= 1 and "2" in chosen:
+        node["hitCharId"] = str(chosen["2"])
+    else:
+        node["hitCharId"] = str(chosen.get("1") or next(iter(chosen.values())))
+    node["hitCharState"] = state if state in (0, 1, 2) else 0
+    node["showCnt"] = max(0, _int(node.get("showCnt"), 0))
+    return {
+        "result": 0,
+        "playerDataDelta": {"deleted": {}, "modified": {"gacha": gacha}},
+    }
 
 
 def public_recruit_state(user):

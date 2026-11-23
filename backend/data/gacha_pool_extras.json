@@ -1,0 +1,75 @@
+{
+  "gachaPoolClient": [
+    {
+      "gachaPoolId": "DOUBLE_79_0_5",
+      "gachaIndex": 280,
+      "openTime": 1795032000,
+      "endTime": 1796241599,
+      "gachaPoolName": "适合多种场合的强力干员",
+      "gachaPoolSummary": "结束于12月3日 03:59",
+      "gachaPoolDetail": "-",
+      "guaranteeName": "标准选调",
+      "guarantee5Avail": 1,
+      "guarantee5Count": 10,
+      "LMTGSID": null,
+      "CDPrimColor": null,
+      "CDSecColor": null,
+      "freeBackColor": null,
+      "gachaRuleType": "DOUBLE",
+      "dynMeta": null,
+      "linkageRuleId": null,
+      "linkageParam": null,
+      "limitParam": null,
+      "upChars": [
+        "char_4027_heyak",
+        "char_4138_narant"
+      ],
+      "up5Chars": [
+        "char_4224_turdus",
+        "char_4155_talr",
+        "char_4122_grabds"
+      ],
+      "rateUp": true
+    },
+    {
+      "gachaPoolId": "CLASSIC_DOUBLE_79_0_2",
+      "gachaIndex": 9904,
+      "openTime": 1795636800,
+      "endTime": 1796846399,
+      "gachaPoolName": "适合多种场合的强力干员",
+      "gachaPoolSummary": "结束于12月10日03:59",
+      "gachaPoolDetail": null,
+      "guaranteeName": "中坚选调",
+      "guarantee5Avail": 1,
+      "guarantee5Count": 10,
+      "LMTGSID": null,
+      "CDPrimColor": null,
+      "CDSecColor": null,
+      "freeBackColor": null,
+      "gachaRuleType": "CLASSIC_DOUBLE",
+      "dynMeta": {
+        "main6RarityCharId": "char_264_f12yin",
+        "rare5CharList": [
+          "char_214_kafka",
+          "char_356_broca",
+          "char_140_whitew"
+        ],
+        "scrollIndex": 8,
+        "sub6RarityCharId": "char_4046_ebnhlz"
+      },
+      "linkageRuleId": null,
+      "linkageParam": null,
+      "limitParam": null,
+      "upChars": [
+        "char_264_f12yin",
+        "char_4046_ebnhlz"
+      ],
+      "up5Chars": [
+        "char_214_kafka",
+        "char_356_broca",
+        "char_140_whitew"
+      ],
+      "rateUp": true
+    }
+  ]
+}
