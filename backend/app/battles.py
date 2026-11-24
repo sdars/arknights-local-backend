@@ -272,6 +272,7 @@ def _default_response():
         "apFailReturn": 0,
         "goldScale": 1,
         "expScale": 1,
+        "itemReturn": [],
         "rewards": [],
         "firstRewards": [],
         "unusualRewards": [],

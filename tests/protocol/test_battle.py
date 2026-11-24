@@ -66,6 +66,7 @@ def test_battle_finish(client, login, test_account):
         timeout=15,
     ).json()
     assert body["result"] == 0
+    assert body["itemReturn"] == []
     stage = body["playerDataDelta"]["modified"]["dungeon"]["stages"]["main_00-01"]
     assert stage["state"] == 3
     assert stage["completeTimes"] >= 1
