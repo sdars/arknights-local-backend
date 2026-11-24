@@ -24,6 +24,7 @@ from .. import (
     gift_catalog,
     grants,
     mail_service,
+    missions,
     payments,
     product_catalog,
     runtime_settings,
@@ -1025,6 +1026,40 @@ def _account_page_context(account):
                 "name": detail[0]["name"] if detail else item_id,
             }
         )
+    mission_rows = []
+    mission_root = user.get("mission") or {}
+    mission_order = {"MAIN": 0, "DAILY": 1, "WEEKLY": 2}
+    for mission_type, bucket in (mission_root.get("missions") or {}).items():
+        if mission_type not in mission_order or not isinstance(bucket, dict):
+            continue
+        for mission_id, node in bucket.items():
+            if not isinstance(node, dict):
+                continue
+            entry = game_data.mission(mission_id) or {}
+            progress = node.get("progress") or []
+            first = progress[0] if progress and isinstance(progress[0], dict) else {}
+            value = _int(first.get("value"), 0)
+            target = max(1, _int(first.get("target"), 1))
+            state = _int(node.get("state"), 0)
+            mission_rows.append(
+                {
+                    "type": mission_type,
+                    "id": str(mission_id),
+                    "name": entry.get("description") or str(mission_id),
+                    "state": state,
+                    "value": value,
+                    "target": target,
+                    "claimable": state == 2 and value >= target,
+                    "point": _int(entry.get("periodicalPoint"), 0),
+                }
+            )
+    mission_rows.sort(
+        key=lambda row: (
+            mission_order.get(row["type"], 9),
+            _int((game_data.mission(row["id"]) or {}).get("sortId"), 0),
+            row["id"],
+        )
+    )
     return {
         "account": account,
         "user": user,
@@ -1042,6 +1077,7 @@ def _account_page_context(account):
         "mail_templates": mail_templates,
         "orders": orders,
         "debt_rows": debt_rows,
+        "mission_rows": mission_rows,
         "mainline_summary": battles.mainline_overview(user),
         "summary": {
             "inventory": len(inventory_rows),
@@ -1386,6 +1422,53 @@ async def account_status_update(request: Request, uid: int):
             _flash(request, sync.get("error") or "主线进度同步失败")
     _save_user(uid, user)
     return RedirectResponse(f"/admin/accounts/{uid}", status_code=303)
+
+
+@router.post("/accounts/{uid}/missions/reset")
+async def account_missions_reset(
+    request: Request,
+    uid: int,
+    mission_type: str = Form("DAILY"),
+):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    account = _account(uid)
+    if not account:
+        return RedirectResponse("/admin/accounts", status_code=303)
+    mission_type = str(mission_type or "DAILY").upper()
+    user = _user(account)
+    root = missions.mission_root(user)
+    if mission_type == "WEEKLY":
+        root["lastWeeklyReset"] = 0
+    else:
+        mission_type = "DAILY"
+        root["lastDailyReset"] = 0
+    missions.ensure_mission_state(user)
+    _save_user(uid, user)
+    _flash(request, f"已按当前周期刷新 {mission_type} 任务")
+    return RedirectResponse(f"/admin/accounts/{uid}#missions", status_code=303)
+
+
+@router.post("/accounts/{uid}/missions/claim")
+async def account_missions_claim(
+    request: Request,
+    uid: int,
+    mission_type: str = Form("DAILY"),
+):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    account = _account(uid)
+    if not account:
+        return RedirectResponse("/admin/accounts", status_code=303)
+    mission_type = str(mission_type or "DAILY").upper()
+    user = _user(account)
+    result = missions.auto_confirm(user, mission_type)
+    _save_user(uid, user)
+    claimed = len(result.get("claimed") or [])
+    _flash(request, f"{mission_type} 任务领取完成：{claimed} 个")
+    return RedirectResponse(f"/admin/accounts/{uid}#missions", status_code=303)
 
 
 @router.post("/accounts/{uid}/inventory")

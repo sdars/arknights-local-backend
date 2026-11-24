@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from conftest import DB_PATH
@@ -37,6 +38,16 @@ def _complete(user, mission_type, mission_id):
         if isinstance(item, dict):
             item["value"] = int(item.get("target", 1) or 1)
     return node
+
+
+def _freeze_periodic_reset(user, now=None):
+    now = int(now or time.time())
+    user["mission"]["lastDailyReset"] = missions._reset_timestamp(now)
+    user["mission"]["lastWeeklyReset"] = missions._weekly_reset_timestamp(now)
+
+
+def _daily_ids():
+    return missions.current_daily_mission_ids()
 
 
 def test_confirm_mission_grants_and_persists(client, login, test_account):
@@ -82,15 +93,19 @@ def test_confirm_mission_is_idempotent(client, login, test_account):
 
 
 def test_in_progress_mission_cannot_be_claimed(client, login, test_account):
+    daily_id = _daily_ids()[1]
     before = _user(test_account["uid"])
-    node = before["mission"]["missions"]["DAILY"]["daily_7102"]
+    node = before["mission"]["missions"]["DAILY"][daily_id]
+    node["state"] = 1
+    node["progress"] = [{"value": 1, "target": 2}]
+    _save_user(test_account["uid"], before)
     assert node["state"] == 1
     before_cards = int(before.get("inventory", {}).get("2001", 0) or 0)
 
     response = client.post(
         f"{client.base_url}/mission/confirmMission",
         headers=login["headers"],
-        json={"missionId": "daily_7102"},
+        json={"missionId": daily_id},
         timeout=15,
     ).json()
     assert response["result"] == 0
@@ -99,30 +114,40 @@ def test_in_progress_mission_cannot_be_claimed(client, login, test_account):
     assert response["items"] == []
 
     after = _user(test_account["uid"])
-    assert after["mission"]["missions"]["DAILY"]["daily_7102"]["state"] == 1
+    assert after["mission"]["missions"]["DAILY"][daily_id]["state"] == 1
     assert after["inventory"].get("2001", 0) == before_cards
 
 
-def test_mission_repair_matches_state_to_progress():
+def test_mission_repair_keeps_confirmed_rows_visible():
     user = _template()
+    _freeze_periodic_reset(user)
+    daily_id = _daily_ids()[0]
     daily = user["mission"]["missions"]["DAILY"]
-    daily["daily_7102"] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
-    daily["daily_7101"] = {"state": 1, "progress": [{"value": 1, "target": 1}]}
+    daily[daily_id] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
     missions.ensure_mission_state(user)
-    assert daily["daily_7102"]["state"] == 1
-    assert daily["daily_7101"]["state"] == 2
+    assert daily[daily_id]["state"] == 2
+    assert daily[daily_id]["progress"] == [{"value": 0, "target": 2}]
+
+
+def test_mission_repair_clamps_group_state_to_enum_values():
+    user = _template()
+    user["mission"]["missionGroups"]["guide_g_1"] = 2
+    missions.ensure_mission_state(user)
+    assert user["mission"]["missionGroups"]["guide_g_1"] == 1
 
 
 def test_claim_rejects_confirmed_but_incomplete_mission():
     user = _template()
+    _freeze_periodic_reset(user)
+    daily_id = _daily_ids()[1]
     daily = user["mission"]["missions"]["DAILY"]
-    daily["daily_7102"] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
+    daily[daily_id] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
     before_cards = int(user.get("inventory", {}).get("2001", 0) or 0)
-    result = missions.claim_missions(user, ["daily_7102"])
+    result = missions.claim_missions(user, [daily_id])
     assert result["claimed"] == []
-    assert result["skipped"][0]["reason"] == "not-completed"
+    assert result["skipped"][0]["reason"] == "progress-incomplete"
     assert result["items"] == []
-    assert daily["daily_7102"]["state"] == 1
+    assert daily[daily_id]["state"] == 2
     assert int(user.get("inventory", {}).get("2001", 0) or 0) == before_cards
 
 
@@ -179,14 +204,16 @@ def test_current_main_mission_stays_visible_before_it_is_complete():
 
 def test_stage_clear_progresses_visible_daily_mission():
     user = _template()
+    _freeze_periodic_reset(user)
+    daily_id = _daily_ids()[1]
     daily = user["mission"]["missions"]["DAILY"]
-    daily["daily_7102"] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
+    daily[daily_id] = {"state": 2, "progress": [{"value": 0, "target": 2}]}
     missions.record_stage_clear(user, "main_00-01", 3)
-    assert daily["daily_7102"]["progress"][0]["value"] == 1
-    assert daily["daily_7102"]["state"] == 1
+    assert daily[daily_id]["progress"][0]["value"] == 1
+    assert daily[daily_id]["state"] == 2
     missions.record_stage_clear(user, "main_00-01", 3)
-    assert daily["daily_7102"]["progress"][0]["value"] == 2
-    assert daily["daily_7102"]["state"] == 2
+    assert daily[daily_id]["progress"][0]["value"] == 2
+    assert daily[daily_id]["state"] == 2
 
 
 def test_confirm_mission_list_and_group_rewards(client, login, test_account):
@@ -223,7 +250,15 @@ def test_confirm_mission_list_and_group_rewards(client, login, test_account):
     assert group["result"] == 0
     assert group["items"] == [{"id": "7003", "type": "TKT_GACHA", "count": 1}]
     user = _user(test_account["uid"])
-    assert user["mission"]["missionGroups"]["guide_g_1"] == 2
+    assert user["mission"]["missionGroups"]["guide_g_1"] == 1
+    repeated = client.post(
+        f"{client.base_url}/mission/confirmMissionGroup",
+        headers=login["headers"],
+        json={"missionGroupId": "guide_g_1"},
+        timeout=15,
+    ).json()
+    assert repeated["result"] == 0
+    assert repeated["items"] == []
 
 
 def test_exchange_mission_point_reward(client, login, test_account):
@@ -244,3 +279,94 @@ def test_exchange_mission_point_reward(client, login, test_account):
     assert response["result"] == 0
     assert response["items"] == [{"id": "4001", "type": "GOLD", "count": 500}]
     assert _user(test_account["uid"])["status"]["gold"] == before_gold + 500
+
+
+def _at(year, month, day, hour=12):
+    return int(time.mktime((year, month, day, hour, 0, 0, 0, 0, -1)))
+
+
+def test_daily_reset_switches_to_weekday_group_and_activates_one_tier_per_family():
+    user = _template()
+    now = _at(2026, 11, 24)
+    missions.reset_periodic_missions(user, now)
+    daily = user["mission"]["missions"]["DAILY"]
+    assert set(daily) == set(missions.current_daily_mission_ids(now))
+    assert list(daily)[:3] == ["daily_7001", "daily_7002", "daily_7003"]
+    active = [mission_id for mission_id, node in daily.items() if node["state"] == 2]
+    assert active == missions._active_mission_ids(list(daily))
+    assert len(active) == 13
+    assert daily["daily_7001"]["state"] == 2
+    assert daily["daily_7002"]["state"] == 1
+    assert user["mission"]["missionGroups"]["daily_g_70"] == 0
+    assert user["mission"]["missionRewards"]["dailyPoint"] == 0
+    assert set(user["mission"]["missionRewards"]["rewards"]["DAILY"]) == {
+        f"reward_daily_{number}" for number in range(682, 692)
+    }
+
+
+def test_daily_reset_switches_to_weekend_group():
+    user = _template()
+    now = _at(2026, 11, 28)
+    missions.reset_periodic_missions(user, now)
+    daily = user["mission"]["missions"]["DAILY"]
+    assert list(daily)[:3] == ["daily_7101", "daily_7102", "daily_7103"]
+    assert user["mission"]["missionGroups"]["daily_g_71"] == 0
+    assert sum(1 for node in daily.values() if node["state"] == 2) == 13
+
+
+def test_weekly_reset_activates_one_tier_per_family_and_clears_points():
+    user = _template()
+    user["mission"]["missionRewards"]["weeklyPoint"] = 12
+    user["mission"]["missionRewards"]["rewards"]["WEEKLY"]["reward_weekly_401"] = 1
+    now = _at(2026, 11, 24)
+    missions.reset_periodic_missions(user, now)
+    weekly = user["mission"]["missions"]["WEEKLY"]
+    assert set(weekly) == set(missions.current_weekly_mission_ids(now))
+    assert sum(1 for node in weekly.values() if node["state"] == 2) == 13
+    assert user["mission"]["missionGroups"]["weekly_g_7"] == 0
+    assert user["mission"]["missionRewards"]["weeklyPoint"] == 0
+    assert user["mission"]["missionRewards"]["rewards"]["WEEKLY"]["reward_weekly_401"] == 0
+    assert user["mission"]["lastWeeklyReset"] == missions._weekly_reset_timestamp(now)
+
+
+def test_claiming_daily_tier_activates_next_tier_in_same_family():
+    user = _template()
+    now = _at(2026, 11, 24)
+    missions.reset_periodic_missions(user, now)
+    daily = user["mission"]["missions"]["DAILY"]
+    daily["daily_7001"]["progress"][0]["value"] = 1
+    result = missions.claim_missions(user, ["daily_7001"])
+    assert result["claimed"] == ["daily_7001"]
+    assert daily["daily_7001"]["state"] == 3
+    assert daily["daily_7002"]["state"] == 2
+    assert daily["daily_7002"]["progress"] == [{"value": 0, "target": 2}]
+    assert daily["daily_7006"]["state"] == 2
+
+
+def test_future_daily_tier_does_not_accumulate_progress():
+    user = _template()
+    now = _at(2026, 11, 24)
+    missions.reset_periodic_missions(user, now)
+    daily = user["mission"]["missions"]["DAILY"]
+    before = dict(daily["daily_7002"])
+    missions.record_stage_clear(user, "main_00-01", 3)
+    assert daily["daily_7002"] == before
+    assert daily["daily_7001"]["progress"][0]["value"] == 1
+
+
+def test_daily_claim_all_advances_each_family_and_awards_points():
+    user = _template()
+    now = _at(2026, 11, 24)
+    missions.reset_periodic_missions(user, now)
+    daily = user["mission"]["missions"]["DAILY"]
+    daily["daily_7001"]["progress"][0]["value"] = 1
+    daily["daily_7006"]["progress"][0]["value"] = 1
+    before_point = user["mission"]["missionRewards"]["dailyPoint"]
+    result = missions.auto_confirm(user, "DAILY")
+    assert set(result["claimed"]) == {"daily_7001", "daily_7006"}
+    assert daily["daily_7001"]["state"] == 3
+    assert daily["daily_7006"]["state"] == 3
+    assert daily["daily_7002"]["state"] == 2
+    assert daily["daily_7007"]["state"] == 2
+    assert user["mission"]["missionRewards"]["dailyPoint"] == before_point + 2
+    assert "mission" in result["playerDataDelta"]["modified"]

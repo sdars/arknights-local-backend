@@ -294,6 +294,7 @@ def finish_battle(account, body):
         if not fresh:
             return {"result": 2, "error": "account not found"}
         user = player_data(fresh)
+        missions.ensure_mission_state(user)
         push_flags = user.get("pushFlags") or {}
         decrypted = decrypt_battle_data(body.get("data"), push_flags.get("status", ""))
         decode = decrypted or {}

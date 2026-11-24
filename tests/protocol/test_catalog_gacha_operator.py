@@ -210,7 +210,7 @@ def test_operator_admin_values_and_char_build_are_visible_in_sync(client, login,
     ).json()
     assert upgraded["result"] == 0, upgraded
     modified = upgraded["playerDataDelta"]["modified"]
-    assert set(modified) == {"troop", "inventory", "status"}
+    assert set(modified) == {"troop", "inventory", "status", "mission"}
     assert set(modified["troop"]) == {"chars"}
     assert set(modified["troop"]["chars"]) == {"2"}
     assert set(modified["troop"]["chars"]["2"]) == {"level", "exp", "favorPoint"}

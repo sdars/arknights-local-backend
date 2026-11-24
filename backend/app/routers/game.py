@@ -173,6 +173,7 @@ async def sync_status(request: Request):
             "consumable",
             "recruit",
             "exgachadata",
+            "mission",
         )
         if key in user
     }
@@ -297,6 +298,33 @@ async def confirm_mission(request: Request):
     result = missions.claim_missions(user, [body.get("missionId")], source="mission")
     save_player(account, user)
     return result
+
+
+@router.post("/social/receiveSocialPoint")
+async def receive_social_point(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    items, delta = grants.apply_items(
+        user,
+        [{"type": "SOCIAL_PT", "id": "SOCIAL_PT", "count": 100}],
+        source="social-point",
+    )
+    missions.record_mission_event(
+        user,
+        "ReceiveSocialPoint",
+        amount_for=lambda entry: 100
+        if missions._mission_target(entry) >= 100
+        else 1,
+    )
+    delta.setdefault("modified", {})["mission"] = user.get("mission", {})
+    save_player(account, user)
+    return {
+        "result": 0,
+        "reward": items,
+        "playerDataDelta": delta,
+    }
 
 
 @router.post("/mission/confirmMissionList")
@@ -654,10 +682,14 @@ async def squad_formation(request: Request):
         squads[squad_id] = squad
     squad["squadId"] = squad_id
     squad["slots"] = normalized
+    mission_changed = bool(missions.record_mission_event(user, "SquadFormation"))
     save_player(account, user)
+    modified = {"troop": user.get("troop", {})}
+    if mission_changed:
+        modified["mission"] = user.get("mission", {})
     return {
         "result": 0,
-        "playerDataDelta": {"deleted": {}, "modified": {"troop": user.get("troop", {})}},
+        "playerDataDelta": {"deleted": {}, "modified": modified},
     }
 
 
@@ -1109,6 +1141,7 @@ async def char_build_upgrade_char(request: Request):
         else:
             inventory[item_id] = have - count
     total_exp += gained
+    old_level = level
     gold = _as_int((user.get("status") or {}).get("gold"), 0)
     while level < max_level:
         need = _as_int(exp_curve[level - 1] if level - 1 < len(exp_curve) else -1, -1)
@@ -1121,14 +1154,20 @@ async def char_build_upgrade_char(request: Request):
     user.setdefault("status", {})["gold"] = gold
     char["level"] = level
     char["exp"] = total_exp
+    mission_changed = False
+    if level > old_level:
+        mission_changed = bool(missions.record_mission_event(user, "UpgradeChar"))
     save_player(account, user)
-    return _char_response(
+    response = _char_response(
         user,
         inst_id,
         char_fields=("level", "exp", "favorPoint"),
         inventory_ids=used_item_ids,
         status_keys=("gold",),
     )
+    if mission_changed:
+        response["playerDataDelta"]["modified"]["mission"] = user.get("mission", {})
+    return response
 
 
 @router.post("/charBuild/evolveChar")
@@ -1268,13 +1307,17 @@ async def char_build_upgrade_skill(request: Request):
             if item_id not in used_item_ids:
                 used_item_ids.append(item_id)
     char["mainSkillLvl"] = target
+    mission_changed = bool(missions.record_mission_event(user, "UpgradeSkill"))
     save_player(account, user)
-    return _char_response(
+    response = _char_response(
         user,
         inst_id,
         char_fields=("mainSkillLvl",),
         inventory_ids=used_item_ids,
     )
+    if mission_changed:
+        response["playerDataDelta"]["modified"]["mission"] = user.get("mission", {})
+    return response
 
 
 @router.post("/charBuild/boostPotential")
@@ -1635,8 +1678,9 @@ async def gacha_finish_normal(request: Request):
         user, [{"id": char_id, "type": "CHAR", "count": 1}], source="public-recruit"
     )
     slot.update({"state": 0, "startTs": -1, "realFinishTs": -1, "maxFinishTs": -1, "selectTags": [], "durationInSec": -1})
+    mission_changed = bool(missions.record_mission_event(user, "NormalGacha"))
     save_player(account, user)
-    return {
+    response = {
         "result": 0,
         "charGet": {"charId": char_id, "itemGet": grant_items},
         "playerDataDelta": {
@@ -1644,6 +1688,9 @@ async def gacha_finish_normal(request: Request):
             "modified": {**delta.get("modified", {}), "recruit": recruit},
         },
     }
+    if mission_changed:
+        response["playerDataDelta"]["modified"]["mission"] = user.get("mission", {})
+    return response
 
 
 @router.post("/gacha/cancelNormalGacha")
@@ -1730,6 +1777,11 @@ async def _shop_buy(request, shop_key):
         platform=_shop_platform(account, body),
     )
     if result.get("result") == 0:
+        if str(shop_key or "").upper() == "SOCIAL":
+            if missions.record_mission_event(user, "BuyShopItem"):
+                result.setdefault("playerDataDelta", {}).setdefault("modified", {})[
+                    "mission"
+                ] = user.get("mission", {})
         save_player(account, user)
     return result
 

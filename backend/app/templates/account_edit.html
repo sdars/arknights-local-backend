@@ -33,6 +33,7 @@
 <nav class="subnav">
   <a href="#profile">账号资料</a>
   <a href="#currency">货币与进度</a>
+  <a href="#missions">任务</a>
   <a href="#inventory">库存</a>
   <a href="#assets">皮肤 / 头像</a>
   <a href="#operators">干员</a>
@@ -101,6 +102,51 @@
     <label class="span-all">签名<textarea name="resume" rows="2">{{ status.get('resume', '') }}</textarea></label>
     <div class="actions span-all"><button class="primary" type="submit">保存货币与进度</button></div>
   </form>
+</section>
+
+<section class="panel" id="missions">
+  <div class="panel-head"><h2>任务</h2><span class="muted">日常 / 周常按 04:00 周期刷新，主线只展示当前任务</span></div>
+  <div class="form-grid">
+    <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/missions/reset">
+      <label>刷新周期
+        <select name="mission_type">
+          <option value="DAILY">日常任务</option>
+          <option value="WEEKLY">周常任务</option>
+        </select>
+      </label>
+      <button type="submit">按当前周期刷新</button>
+    </form>
+    <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/missions/claim">
+      <label>领取类型
+        <select name="mission_type">
+          <option value="DAILY">日常任务</option>
+          <option value="WEEKLY">周常任务</option>
+          <option value="MAIN">主线任务</option>
+        </select>
+      </label>
+      <button class="primary" type="submit">领取已完成任务</button>
+    </form>
+  </div>
+  <p class="muted small-note">只领取 state=2 且进度已满的任务；未完成的任务不会发放奖励。刷新会把该周期已领取状态与积分清零。</p>
+  <div class="table-wrap">
+  <table class="table compact-table">
+    <thead><tr><th>类型</th><th>任务</th><th>状态</th><th>进度</th><th>积分</th></tr></thead>
+    <tbody>
+    {% set active_missions = mission_rows | selectattr('state', 'equalto', 2) | list %}
+    {% for row in active_missions %}
+      <tr>
+        <td class="mono">{{ row.type }}</td>
+        <td>{{ row.name }}<div class="muted mono">{{ row.id }}</div></td>
+        <td>{% if row.claimable %}<strong>可领取</strong>{% else %}进行中{% endif %}</td>
+        <td class="mono">{{ row.value }} / {{ row.target }}</td>
+        <td>{{ row.point }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">没有进行中的任务。可先按当前周期刷新。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
 </section>
 
 <section class="panel" id="inventory">

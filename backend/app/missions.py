@@ -1,6 +1,10 @@
 import re
+import time
 
 from . import game_data, grants
+
+
+DAILY_RESET_HOUR = 4
 
 
 def _dict(parent, key):
@@ -47,14 +51,274 @@ def _progress_done(node):
     return seen
 
 
+def _reset_timestamp(now=None):
+    now = int(now or time.time())
+    local = time.localtime(now)
+    reset = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday, DAILY_RESET_HOUR, 0, 0, 0, 0, -1)))
+    if now < reset:
+        reset -= 86400
+    return reset
+
+
+def _weekly_reset_timestamp(now=None):
+    daily = _reset_timestamp(now)
+    # tm_wday is Monday=0.  A Monday before 04:00 still belongs to the
+    # previous weekly period because the daily reset has not happened yet.
+    monday = daily - time.localtime(daily).tm_wday * 86400
+    return monday
+
+
+def _current_daily_groups(now=None):
+    now = int(now or time.time())
+    weekday = time.localtime(now).tm_wday + 1
+    periods = (game_data.mission_table() or {}).get("dailyMissionPeriodInfo") or []
+    active = []
+    for period in periods:
+        if not isinstance(period, dict):
+            continue
+        start = int(period.get("startTime") or 0)
+        end = int(period.get("endTime") or 0)
+        if start <= now <= end:
+            active = period.get("periodList") or []
+            break
+    if not active and periods:
+        active = (periods[-1] or {}).get("periodList") or []
+    groups = []
+    for item in active:
+        if not isinstance(item, dict):
+            continue
+        if weekday in [int(value) for value in item.get("period") or []]:
+            groups.append(item)
+    return groups
+
+
+def current_daily_mission_ids(now=None):
+    result = []
+    for item in _current_daily_groups(now):
+        group = game_data.mission_group(str(item.get("missionGroupId") or "")) or {}
+        for mission_id in group.get("missionIds") or []:
+            if mission_id not in result:
+                result.append(str(mission_id))
+    return result
+
+
+def current_weekly_mission_ids(now=None):
+    groups = _current_weekly_groups(now)
+    result = []
+    for _, group in groups:
+        for mission_id in group.get("missionIds") or []:
+            if mission_id not in result:
+                result.append(str(mission_id))
+    return result
+
+
+def _current_weekly_groups(now=None):
+    now = int(now or time.time())
+    groups = []
+    for group_id, group in ((game_data.mission_table() or {}).get("missionGroups") or {}).items():
+        if not isinstance(group, dict) or str(group.get("type") or "").upper() != "WEEKLY":
+            continue
+        start = int(group.get("startTs") or 0)
+        end = int(group.get("endTs") or 0)
+        if start > 0 and end > 0 and not (start <= now <= end):
+            continue
+        groups.append((start, str(group_id), group))
+    groups.sort()
+    if not groups:
+        return []
+    latest = groups[-1][0]
+    return [(group_id, group) for start, group_id, group in groups if start == latest]
+
+
+def _mission_target(entry):
+    template = str(entry.get("template") or "")
+    params = []
+    for value in entry.get("param") or []:
+        try:
+            params.append(int(value))
+        except (TypeError, ValueError):
+            params.append(None)
+    if template in {"CompleteStageAnyType", "CompleteAnyStage", "EnemyKillInAnyStage"}:
+        if len(params) > 1 and params[1] and params[1] > 0:
+            return params[1]
+    for value in reversed(params):
+        if value is not None and value > 0:
+            return value
+    return 1
+
+
+def _mission_family(mission_id):
+    entry = game_data.mission(mission_id) or {}
+    return str(entry.get("template") or "")
+
+
+def _active_mission_ids(mission_ids):
+    """Return the first tier of every independent mission family."""
+    seen = set()
+    active = []
+    for mission_id in mission_ids:
+        family = _mission_family(mission_id)
+        if not family or family in seen:
+            continue
+        seen.add(family)
+        active.append(str(mission_id))
+    return active
+
+
+def _fresh_mission_node(mission_id, active=True):
+    entry = game_data.mission(mission_id) or {}
+    return {
+        # CONFIRMED is the client's visible/in-progress state.  IN_EFFECT is
+        # reserved for tiers that are not unlocked yet, so a bucket containing
+        # only state=1 rows renders as an empty mission page.
+        "state": 2 if active else 1,
+        "progress": [{"value": 0, "target": _mission_target(entry)}],
+    }
+
+
+def _reset_bucket(user, mission_type, mission_ids):
+    if not mission_ids:
+        return
+    bucket = mission_bucket(user, mission_type, create=True)
+    bucket.clear()
+    active = set(_active_mission_ids(mission_ids))
+    for mission_id in mission_ids:
+        if game_data.mission(mission_id):
+            bucket[mission_id] = _fresh_mission_node(
+                mission_id, active=str(mission_id) in active
+            )
+
+
+def _ensure_active_tier(user, mission_type):
+    """Repair DAILY/WEEKLY buckets so each family has exactly one visible tier."""
+    bucket = mission_bucket(user, mission_type, create=False)
+    if not bucket:
+        return
+    families = {}
+    for mission_id in bucket:
+        entry = game_data.mission(mission_id) or {}
+        family = str(entry.get("template") or "")
+        if not family:
+            continue
+        families.setdefault(family, []).append(mission_id)
+    for mission_ids in families.values():
+        mission_ids.sort(key=lambda mid: int((game_data.mission(mid) or {}).get("sortId") or 0))
+        current = None
+        for mission_id in mission_ids:
+            node = bucket.get(mission_id)
+            if not isinstance(node, dict):
+                continue
+            state = int(node.get("state", 1) or 1)
+            if state == 3:
+                continue
+            if current is None:
+                node["state"] = 2
+                current = mission_id
+            elif state == 2:
+                # Legacy saves that marked every tier active must collapse
+                # back to the first unfinished tier in this family.
+                node["state"] = 1
+
+
+def _sync_active_group_states(user, now=None):
+    """Publish the groups that own today's DAILY/WEEKLY missions.
+
+    The client builds the mission page from the group table first.  A bucket
+    full of daily_70xx rows is invisible when ``daily_g_70`` is missing from
+    missionGroups, even though the missions themselves deserialize fine.
+    """
+    root = mission_root(user)
+    states = root["missionGroups"]
+    pairs = []
+    for item in _current_daily_groups(now):
+        group_id = str(item.get("missionGroupId") or "")
+        if group_id:
+            pairs.append(("DAILY", group_id))
+    for group_id, _group in _current_weekly_groups(now):
+        pairs.append(("WEEKLY", group_id))
+    for mission_type, group_id in pairs:
+        bucket = mission_bucket(user, mission_type, create=False)
+        group = game_data.mission_group(group_id) or {}
+        mission_ids = [str(value) for value in group.get("missionIds") or []]
+        if mission_ids and all(
+            isinstance(bucket.get(mission_id), dict)
+            and int(bucket[mission_id].get("state", 0) or 0) == 3
+            for mission_id in mission_ids
+        ):
+            states[group_id] = 1
+        else:
+            states[group_id] = 0
+
+
+def _reward_claims_for_groups(mission_type, group_ids):
+    table = game_data.mission_table() or {}
+    rows = {}
+    source = table.get("weeklyRewards") if mission_type == "WEEKLY" else table.get("periodicalRewards")
+    for reward_id, reward in (source or {}).items():
+        if not isinstance(reward, dict) or str(reward.get("type") or "").upper() != mission_type:
+            continue
+        if str(reward.get("groupId") or "") in group_ids:
+            rows[str(reward_id)] = 0
+    return rows
+
+
+def reset_periodic_missions(user, now=None):
+    """Roll DAILY/WEEKLY missions at the local 04:00 reset boundary."""
+    now = int(now or time.time())
+    root = mission_root(user)
+    changed = False
+    daily_reset = _reset_timestamp(now)
+    last_daily = int(root.get("lastDailyReset", 0) or 0)
+    if last_daily < daily_reset:
+        groups = _current_daily_groups(now)
+        mission_ids = current_daily_mission_ids(now)
+        _reset_bucket(user, "DAILY", mission_ids)
+        rewards = root["missionRewards"]
+        rewards["dailyPoint"] = 0
+        rewards["rewards"]["DAILY"] = _reward_claims_for_groups(
+            "DAILY", {str(item.get("rewardGroupId") or "") for item in groups}
+        )
+        root["lastDailyReset"] = daily_reset
+        changed = True
+    weekly_reset = _weekly_reset_timestamp(now)
+    last_weekly = int(root.get("lastWeeklyReset", 0) or 0)
+    if last_weekly < weekly_reset:
+        weekly_reward_groups = set()
+        for reward in ((game_data.mission_table() or {}).get("weeklyRewards") or {}).values():
+            if not isinstance(reward, dict):
+                continue
+            begin = int(reward.get("beginTime") or 0)
+            end = int(reward.get("endTime") or 0)
+            if begin <= now <= end:
+                weekly_reward_groups.add(str(reward.get("groupId") or ""))
+        _reset_bucket(user, "WEEKLY", current_weekly_mission_ids(now))
+        rewards = root["missionRewards"]
+        rewards["weeklyPoint"] = 0
+        rewards["rewards"]["WEEKLY"] = _reward_claims_for_groups("WEEKLY", weekly_reward_groups)
+        root["lastWeeklyReset"] = weekly_reset
+        changed = True
+    _sync_active_group_states(user, now)
+    return changed
+
+
 def ensure_mission_state(user):
     """Repair legacy/template mission rows before the client sees them.
 
-    IN_EFFECT (1) renders an unfinished mission with its progress bar;
-    CONFIRMED (2) renders the claim button.  Keep those two states aligned with
-    the stored progress so incomplete rows cannot advertise a bogus claim.
+    CONFIRMED (2) is the state the mission page renders.  IN_EFFECT (1) rows
+    are future tiers and are deliberately hidden until the previous tier is
+    claimed.  Only one tier per daily/weekly family may be CONFIRMED.
     """
+    reset_periodic_missions(user)
     root = mission_root(user)
+    for group_id, value in list((root.get("missionGroups") or {}).items()):
+        try:
+            state = int(value or 0)
+        except (TypeError, ValueError):
+            state = 0
+        # MissionGroupState only has Uncomplete=0 and Complete=1.  Older
+        # builds wrote 2 after granting a group reward, which the client can
+        # not deserialize into the enum.
+        root["missionGroups"][group_id] = 1 if state else 0
     for bucket in (root.get("missions") or {}).values():
         if not isinstance(bucket, dict):
             continue
@@ -66,13 +330,12 @@ def ensure_mission_state(user):
                 node["progress"] = [{"value": 0, "target": 1}]
                 progress = node["progress"]
             state = int(node.get("state", 0) or 0)
-            done = _progress_done(node)
             if state == 3:
                 continue
-            if state in (1, 2):
-                node["state"] = 2 if done else 1
-            elif state not in (0, 1, 2):
+            if state not in (0, 1, 2):
                 node["state"] = 1
+    for mission_type in ("DAILY", "WEEKLY"):
+        _ensure_active_tier(user, mission_type)
     # The template is also used by accounts that already cleared story
     # stages.  Restore the one-shot CompleteStage/CompleteMainStage missions
     # from the authoritative dungeon clear flags instead of leaving them at
@@ -171,6 +434,22 @@ def ensure_main_mission_chain(user):
 
 
 def _next_mission_id(mission_id, mission_type):
+    entry = game_data.mission(mission_id) or {}
+    if mission_type in {"DAILY", "WEEKLY"}:
+        group = game_data.mission_group(entry.get("missionGroup")) or {}
+        mission_ids = [str(value) for value in group.get("missionIds") or []]
+        try:
+            index = mission_ids.index(str(mission_id))
+        except ValueError:
+            index = -1
+        family = str(entry.get("template") or "")
+        if index >= 0 and family:
+            for candidate in mission_ids[index + 1 :]:
+                candidate_entry = game_data.mission(candidate) or {}
+                if str(candidate_entry.get("template") or "") != family:
+                    break
+                return candidate
+        return None
     match = re.match(r"^(.*_)(\d+)$", str(mission_id or ""))
     if not match:
         return None
@@ -195,12 +474,16 @@ def _activate_next(user, mission_id, mission_type):
     if not candidate:
         return
     bucket = mission_bucket(user, mission_type, create=True)
-    if candidate in bucket:
-        return
-    bucket[candidate] = {
-        "state": 1,
-        "progress": [{"value": 0, "target": 1}],
-    }
+    existing = bucket.get(candidate)
+    if isinstance(existing, dict):
+        state = int(existing.get("state", 0) or 0)
+        if state == 3:
+            return
+        if state == 2 and isinstance(existing.get("progress"), list) and existing["progress"]:
+            # The next tier was already promoted (or was seeded by the
+            # template).  Never reset its accumulated progress.
+            return
+    bucket[candidate] = _fresh_mission_node(candidate, active=True)
 
 
 def _complete_progress(node):
@@ -278,9 +561,6 @@ def claim_missions(user, mission_ids, source="mission"):
         if points:
             key = "weeklyPoint" if mission_type == "WEEKLY" else "dailyPoint"
             root["missionRewards"][key] = int(root["missionRewards"].get(key, 0) or 0) + points
-        group_id = entry.get("missionGroup")
-        if group_id:
-            root["missionGroups"].setdefault(str(group_id), 1)
         _activate_next(user, mission_id, mission_type)
         claimed.append(mission_id)
 
@@ -339,7 +619,7 @@ def confirm_group(user, group_id):
         return {"result": 1, "error": f"unknown mission group: {group_id}"}
     root = mission_root(user)
     states = root["missionGroups"]
-    if int(states.get(group_id, 0) or 0) == 2:
+    if int(states.get(group_id, 0) or 0) == 1:
         return _success([], {"playerDataDelta": grants.empty_delta()})
     for mission_id in group.get("missionIds") or []:
         entry = game_data.mission(mission_id) or {}
@@ -348,7 +628,7 @@ def confirm_group(user, group_id):
         if not isinstance(node, dict) or int(node.get("state", 0) or 0) != 3:
             return {"result": 1, "error": "mission group is not complete"}
     items, delta = grants.apply_items(user, group.get("rewards") or [], source="mission-group")
-    states[group_id] = 2
+    states[group_id] = 1
     delta["modified"]["mission"] = user.get("mission", {})
     return _success(items, {"playerDataDelta": delta})
 
@@ -388,7 +668,10 @@ def record_stage_clear(user, stage_id, complete_state, kill_count=0, assist=Fals
             if not isinstance(node, dict):
                 continue
             state = int(node.get("state", 0) or 0)
-            if state not in (1, 2):
+            # Only the visible tier of a family is active.  State 1 rows are
+            # future tiers and must not accumulate progress before they are
+            # promoted to CONFIRMED.
+            if state != 2:
                 continue
             entry = game_data.mission(mission_id)
             if not entry:
@@ -435,6 +718,52 @@ def record_stage_clear(user, stage_id, complete_state, kill_count=0, assist=Fals
             if complete or done:
                 node["state"] = 2
                 completed.append(mission_id)
-            elif int(node.get("state", 0) or 0) != 3:
-                node["state"] = 1
+            else:
+                node["state"] = 2
     return completed
+
+
+def record_mission_event(user, template, amount=1, match=None, amount_for=None):
+    """Advance visible missions whose template matches a gameplay event.
+
+    ``match`` is an optional callable receiving the static MissionData entry;
+    it is used for templates whose parameters restrict the event (for example
+    a specific item id).  Only CONFIRMED (state 2) rows are visible and may
+    accumulate progress; future tiers stay untouched until they are promoted.
+    """
+    ensure_mission_state(user)
+    if not template or amount <= 0:
+        return []
+    changed = []
+    root = mission_root(user)
+    for bucket in (root.get("missions") or {}).values():
+        if not isinstance(bucket, dict):
+            continue
+        for mission_id, node in bucket.items():
+            if not isinstance(node, dict):
+                continue
+            if int(node.get("state", 0) or 0) != 2:
+                continue
+            entry = game_data.mission(mission_id) or {}
+            if str(entry.get("template") or "") != str(template):
+                continue
+            if match is not None and not match(entry):
+                continue
+            increment = int(amount_for(entry) if amount_for else amount)
+            if increment <= 0:
+                continue
+            progress = node.get("progress")
+            if not isinstance(progress, list) or not progress:
+                progress = [{"value": 0, "target": _mission_target(entry)}]
+                node["progress"] = progress
+            before = [int(item.get("value", 0) or 0) for item in progress if isinstance(item, dict)]
+            for item in progress:
+                if not isinstance(item, dict):
+                    continue
+                target = max(1, int(item.get("target", 1) or 1))
+                value = int(item.get("value", 0) or 0)
+                item["value"] = min(target, value + increment)
+            after = [int(item.get("value", 0) or 0) for item in progress if isinstance(item, dict)]
+            if after != before:
+                changed.append(str(mission_id))
+    return changed
