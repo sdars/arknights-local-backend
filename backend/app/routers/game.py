@@ -377,6 +377,65 @@ async def activity_reward_only_get_reward(request: Request):
     }
 
 
+@router.post("/social/getSortListInfo")
+async def social_sort_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    # GetSortListInfoResponse.result is a List<FriendSortViewModel>, not an
+    # int status.  The generic fallback returned 0, which the client tried
+    # to deserialize as a list and crashed with the unknown-error dialog.
+    return {
+        "result": [],
+        "starFriendList": [],
+        "playerDataDelta": {"deleted": {}, "modified": {}},
+        "pushMessage": [],
+    }
+
+
+@router.post("/social/searchPlayer")
+async def social_search_player(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    return {"players": [], "friendStatusList": [], "resultIdList": []}
+
+
+@router.post("/social/getFriendList")
+async def social_friend_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    return {
+        "friends": [],
+        "friendAlias": [],
+        "resultIdList": [],
+        "playerDataDelta": {"deleted": {}, "modified": {}},
+        "pushMessage": [],
+    }
+
+
+@router.post("/social/getFriendRequestList")
+async def social_friend_request_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    return {
+        "requestList": [],
+        "resultIdList": [],
+        "playerDataDelta": {"deleted": {}, "modified": {}},
+        "pushMessage": [],
+    }
+
+
+@router.post("/social/getFriendAndRequestSendList")
+async def social_friend_and_send_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    return {"friendsList": [], "requestSendIdList": []}
+
+
 @router.post("/social/receiveSocialPoint")
 async def receive_social_point(request: Request):
     account = auth(request)
