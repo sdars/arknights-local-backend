@@ -23,6 +23,7 @@ from .. import (
     payments,
     runtime_settings,
     shop_service,
+    social as social_service,
 )
 
 router = APIRouter()
@@ -119,6 +120,7 @@ async def sync_data(request: Request):
     gacha_service.ensure_gacha_state(user)
     missions.ensure_mission_state(user)
     checkin_service.ensure_state(user)
+    social_service.ensure_state(user)
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
@@ -382,15 +384,11 @@ async def social_sort_list(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
-    # GetSortListInfoResponse.result is a List<FriendSortViewModel>, not an
-    # int status.  The generic fallback returned 0, which the client tried
-    # to deserialize as a list and crashed with the unknown-error dialog.
-    return {
-        "result": [],
-        "starFriendList": [],
-        "playerDataDelta": {"deleted": {}, "modified": {}},
-        "pushMessage": [],
-    }
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.sort_list(account, player_data(account), body)
 
 
 @router.post("/social/searchPlayer")
@@ -398,7 +396,11 @@ async def social_search_player(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
-    return {"players": [], "friendStatusList": [], "resultIdList": []}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.search_players(account, player_data(account), body)
 
 
 @router.post("/social/getFriendList")
@@ -406,13 +408,11 @@ async def social_friend_list(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
-    return {
-        "friends": [],
-        "friendAlias": [],
-        "resultIdList": [],
-        "playerDataDelta": {"deleted": {}, "modified": {}},
-        "pushMessage": [],
-    }
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.get_friend_list(account, player_data(account), body)
 
 
 @router.post("/social/getFriendRequestList")
@@ -420,12 +420,11 @@ async def social_friend_request_list(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
-    return {
-        "requestList": [],
-        "resultIdList": [],
-        "playerDataDelta": {"deleted": {}, "modified": {}},
-        "pushMessage": [],
-    }
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.get_friend_request_list(account, player_data(account), body)
 
 
 @router.post("/social/getFriendAndRequestSendList")
@@ -433,7 +432,103 @@ async def social_friend_and_send_list(request: Request):
     account = auth(request)
     if not account:
         return {"result": 2, "error": "invalid token"}
-    return {"friendsList": [], "requestSendIdList": []}
+    return social_service.friend_and_send_list(account, player_data(account))
+
+
+@router.post("/social/sendFriendRequest")
+async def social_send_request(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.send_friend_request(account, player_data(account), body)
+
+
+@router.post("/social/processFriendRequest")
+async def social_process_request(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.process_request(account, player_data(account), body)
+
+
+@router.post("/social/deleteFriend")
+async def social_delete_friend(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.delete_friend(account, player_data(account), body)
+
+
+@router.post("/social/setAssistCharList")
+async def social_set_assist(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.set_assist_chars(account, player_data(account), body)
+
+
+@router.post("/social/setStarFriendList")
+async def social_set_star(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.set_star_list(account, player_data(account), body)
+
+
+@router.post("/social/setFriendAlias")
+async def social_set_alias(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.set_alias(account, player_data(account), body)
+
+
+@router.post("/social/getNameCardWithStatus")
+async def social_name_card(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.name_card(account, player_data(account), body)
+
+
+@router.post("/businessCard/getOtherPlayerNameCard")
+async def other_player_name_card(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.name_card(account, player_data(account), body)
 
 
 @router.post("/social/receiveSocialPoint")
