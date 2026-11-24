@@ -300,6 +300,67 @@ async def confirm_mission(request: Request):
     return result
 
 
+@router.post("/activity/actRewardOnly/getReward")
+async def activity_reward_only_get_reward(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    activity_id = str(body.get("activityId") or "act1reward")
+    pool_id = str(body.get("poolId") or "")
+    table = game_data.excel("activity_table.json") or {}
+    act = ((table.get("dynActs") or {}).get(activity_id) or {})
+    pools = act.get("rewardPoolDataDict") or {}
+    pool = pools.get(pool_id) or {}
+    char_ids = [str(value) for value in pool.get("charIdList") or [] if value]
+    if not char_ids:
+        return {"result": 1, "error": "unknown reward pool"}
+    user = player_data(account)
+    activity = user.setdefault("activity", {})
+    reward_only = activity.setdefault("REWARD_ONLY", {})
+    state = reward_only.get(activity_id)
+    if isinstance(state, dict) and state.get("hit"):
+        return {"result": 1, "error": "reward already claimed"}
+    owned = {
+        str(char.get("charId") or "")
+        for char in ((user.get("troop") or {}).get("chars") or {}).values()
+        if isinstance(char, dict)
+    }
+    candidates = [char_id for char_id in char_ids if char_id not in owned] or char_ids
+    char_id = random.choice(candidates)
+    is_new = char_id not in owned
+    items, delta = grants.apply_items(
+        user, [{"id": char_id, "type": "CHAR", "count": 1}], source="reward-only"
+    )
+    reward_only[activity_id] = {"hit": char_id, "choice": pool_id}
+    inst_id = 0
+    for key, char in ((user.get("troop") or {}).get("chars") or {}).items():
+        if isinstance(char, dict) and char.get("charId") == char_id:
+            inst_id = _as_int(key, 0)
+            break
+    meta = game_data.character(char_id) or {}
+    rarity = _as_int(str(meta.get("rarity") or "TIER_6").replace("TIER_", ""), 6)
+    delta.setdefault("modified", {})["activity"] = user.get("activity", {})
+    char_get = {
+        "charId": char_id,
+        "charInstId": inst_id,
+        "isNew": 1 if is_new else 0,
+        "rarity": rarity,
+        "itemGet": [] if is_new else [{"id": f"p_{char_id}", "type": "MATERIAL", "count": 1}],
+        "potent": None,
+    }
+    save_player(account, user)
+    return {
+        "result": 0,
+        "charGet": char_get,
+        "reward": items,
+        "playerDataDelta": delta,
+    }
+
+
 @router.post("/social/receiveSocialPoint")
 async def receive_social_point(request: Request):
     account = auth(request)
