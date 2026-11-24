@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import random
@@ -26,6 +27,19 @@ from .. import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _guide_snapshot(user):
+    return copy.deepcopy(
+        ((user.get("mission") or {}).get("missions") or {}).get("GUIDE_V3") or {}
+    )
+
+
+def _guide_changed(user, before):
+    """Re-derive GUIDE_V3 after a save change and report if it moved."""
+    missions.ensure_mission_state(user)
+    after = ((user.get("mission") or {}).get("missions") or {}).get("GUIDE_V3") or {}
+    return before != after
 
 
 def empty_delta():
@@ -1172,6 +1186,7 @@ async def char_build_upgrade_char(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
+    guide_before = _guide_snapshot(user)
     inst_id = str(body.get("charInstId") or "")
     char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
@@ -1226,6 +1241,8 @@ async def char_build_upgrade_char(request: Request):
     mission_changed = False
     if level > old_level:
         mission_changed = bool(missions.record_mission_event(user, "UpgradeChar"))
+    if _guide_changed(user, guide_before):
+        mission_changed = True
     save_player(account, user)
     response = _char_response(
         user,
@@ -1246,6 +1263,7 @@ async def char_build_evolve_char(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
+    guide_before = _guide_snapshot(user)
     inst_id = str(body.get("charInstId") or "")
     char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
@@ -1296,14 +1314,18 @@ async def char_build_evolve_char(request: Request):
     char["evolvePhase"] = dest
     char["level"] = min(_as_int(char.get("level"), 1), _phase_max_level(meta, dest))
     _sync_skill_unlocks(char, meta)
+    guide_changed = _guide_changed(user, guide_before)
     save_player(account, user)
-    return _char_response(
+    response = _char_response(
         user,
         inst_id,
         full_char=True,
         inventory_ids=used_item_ids,
         status_keys=("gold",),
     )
+    if guide_changed:
+        response["playerDataDelta"]["modified"]["mission"] = user.get("mission", {})
+    return response
 
 
 @router.post("/charBuild/evolveCharUseItem")
@@ -1318,6 +1340,7 @@ async def char_build_level_max_item(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
+    guide_before = _guide_snapshot(user)
     inst_id = str(body.get("charInsId") or body.get("charInstId") or "")
     char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
@@ -1334,13 +1357,17 @@ async def char_build_level_max_item(request: Request):
             inventory[item_id] = have - 1
     char["level"] = _phase_max_level(game_data.character(char.get("charId")) or {}, _as_int(char.get("evolvePhase"), 0))
     char["exp"] = 0
+    guide_changed = _guide_changed(user, guide_before)
     save_player(account, user)
-    return _char_response(
+    response = _char_response(
         user,
         inst_id,
         char_fields=("level", "exp"),
         inventory_ids=(item_id,) if item_id else (),
     )
+    if guide_changed:
+        response["playerDataDelta"]["modified"]["mission"] = user.get("mission", {})
+    return response
 
 
 @router.post("/charBuild/upgradeSkill")
@@ -1350,6 +1377,7 @@ async def char_build_upgrade_skill(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
+    guide_before = _guide_snapshot(user)
     inst_id = str(body.get("charInstId") or "")
     char, _ = _char_by_inst(user, inst_id)
     if not isinstance(char, dict):
@@ -1377,6 +1405,8 @@ async def char_build_upgrade_skill(request: Request):
                 used_item_ids.append(item_id)
     char["mainSkillLvl"] = target
     mission_changed = bool(missions.record_mission_event(user, "UpgradeSkill"))
+    if _guide_changed(user, guide_before):
+        mission_changed = True
     save_player(account, user)
     response = _char_response(
         user,
@@ -1549,6 +1579,7 @@ async def char_build_specialize(request: Request):
         return {"result": 2, "error": "invalid token"}
     body = await request.json()
     user = player_data(account)
+    guide_before = _guide_snapshot(user)
     inst_id = str(body.get("charInstId") or "")
     char, _ = _char_by_inst(user, inst_id)
     if isinstance(char, dict):
@@ -1556,8 +1587,14 @@ async def char_build_specialize(request: Request):
         index = _as_int(body.get("skillIndex"), 0)
         if 0 <= index < len(skills) and isinstance(skills[index], dict):
             skills[index]["specializeLevel"] = max(0, min(3, _as_int(body.get("targetLevel"), 1)))
+        guide_changed = _guide_changed(user, guide_before)
         save_player(account, user)
-    return _char_response(user, inst_id, char_fields=("skills",))
+    else:
+        guide_changed = False
+    response = _char_response(user, inst_id, char_fields=("skills",))
+    if guide_changed:
+        response["playerDataDelta"]["modified"]["mission"] = user.get("mission", {})
+    return response
 
 
 @router.post("/charBuild/addonStory/unlock")
