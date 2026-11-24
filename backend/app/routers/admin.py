@@ -1471,6 +1471,48 @@ async def account_missions_claim(
     return RedirectResponse(f"/admin/accounts/{uid}#missions", status_code=303)
 
 
+@router.post("/accounts/{uid}/missions/progress")
+async def account_mission_progress(
+    request: Request,
+    uid: int,
+    mission_id: str = Form(...),
+    value: int = Form(0),
+):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    account = _account(uid)
+    if not account:
+        return RedirectResponse("/admin/accounts", status_code=303)
+    mission_id = str(mission_id or "").strip()
+    entry = game_data.mission(mission_id) or {}
+    if not entry:
+        _flash(request, f"任务不存在：{mission_id}")
+        return RedirectResponse(f"/admin/accounts/{uid}#missions", status_code=303)
+    user = _user(account)
+    mission_type = str(entry.get("type") or "").upper()
+    bucket = missions.mission_bucket(user, mission_type, create=True)
+    node = bucket.get(mission_id)
+    if not isinstance(node, dict):
+        node = {"state": 2, "progress": []}
+        bucket[mission_id] = node
+    progress = node.get("progress")
+    if not isinstance(progress, list) or not progress:
+        progress = [{"value": 0, "target": missions._mission_target(entry)}]
+        node["progress"] = progress
+    first = progress[0]
+    if not isinstance(first, dict):
+        first = {"value": 0, "target": missions._mission_target(entry)}
+        progress[0] = first
+    target = max(1, _int(first.get("target"), 1))
+    first["value"] = min(target, max(0, int(value)))
+    if int(node.get("state") or 0) == 3:
+        node["state"] = 2
+    _save_user(uid, user)
+    _flash(request, f"已写入 {mission_id} 进度 {first['value']} / {target}")
+    return RedirectResponse(f"/admin/accounts/{uid}#missions", status_code=303)
+
+
 @router.post("/accounts/{uid}/inventory")
 async def account_inventory_update(request: Request, uid: int):
     redirect = need_login(request)

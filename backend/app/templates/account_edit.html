@@ -126,6 +126,11 @@
       </label>
       <button class="primary" type="submit">领取已完成任务</button>
     </form>
+    <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/missions/progress">
+      <label>任务 ID<input name="mission_id" placeholder="daily_7001" required></label>
+      <label>进度<input type="number" name="value" value="0" min="0"></label>
+      <button type="submit">写入进度</button>
+    </form>
   </div>
   <p class="muted small-note">只领取 state=2 且进度已满的任务；未完成的任务不会发放奖励。刷新会把该周期已领取状态与积分清零。</p>
   <div class="table-wrap">
