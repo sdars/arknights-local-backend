@@ -105,7 +105,7 @@
 </section>
 
 <section class="panel" id="missions">
-  <div class="panel-head"><h2>任务</h2><span class="muted">日常 / 周常按 04:00 周期刷新，主线只展示当前任务</span></div>
+  <div class="panel-head"><h2>任务</h2><span class="muted">日常 / 周常按 04:00 周期刷新；见习任务进度由关卡 / 干员 / 基建 / 商店状态自动同步</span></div>
   <div class="form-grid">
     <form class="inline-form" method="post" action="/admin/accounts/{{ account.uid }}/missions/reset">
       <label>刷新周期
@@ -122,6 +122,7 @@
           <option value="DAILY">日常任务</option>
           <option value="WEEKLY">周常任务</option>
           <option value="MAIN">主线任务</option>
+          <option value="GUIDE_V3">见习任务</option>
         </select>
       </label>
       <button class="primary" type="submit">领取已完成任务</button>
@@ -132,12 +133,12 @@
       <button type="submit">写入进度</button>
     </form>
   </div>
-  <p class="muted small-note">只领取 state=2 且进度已满的任务；未完成的任务不会发放奖励。刷新会把该周期已领取状态与积分清零。</p>
+  <p class="muted small-note">只领取 state=2 且进度已满的任务；未完成的任务不会发放奖励。刷新会把该周期已领取状态与积分清零。见习任务只能领取，不能手动刷新。</p>
   <div class="table-wrap">
   <table class="table compact-table">
     <thead><tr><th>类型</th><th>任务</th><th>状态</th><th>进度</th><th>积分</th></tr></thead>
     <tbody>
-    {% set active_missions = mission_rows | selectattr('state', 'equalto', 2) | list %}
+    {% set active_missions = mission_rows | selectattr('visible') | list %}
     {% for row in active_missions %}
       <tr>
         <td class="mono">{{ row.type }}</td>

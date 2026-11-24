@@ -71,6 +71,8 @@ Web UI 新增「研发状态」页：`http://127.0.0.1:8443/admin/development`�
 
 > 2026-11-23 三次修复：`/openServerV3/getCheckInReward` 原先落入空 delta 兜底，客户端收到 200 但 UI 不刷新。现在按 `index` 读取累计签到表、发放 `items` / `reward`、把 `history[index]` 置 0、同步 `status` 与 `openServerV3` 增量并落库；重复领取保持幂等。
 
+> 2026-11-24 修复：见习任务（`GUIDE_V3`）此前不在 `mission_table.json`，全部停留在 `0/1`。现在从 `open_server_table.json → openServerV3Data.missionData` 读取，并按主线 / 突袭 / 角色等级 / 精英化 / 技能 / 基建中枢 / 商店购买进度实时推导；Web UI 任务面板同步展示当前阶段。累计签到按每日签到历史补齐 `history`，`index=-1` 领取下一个未领取日，越界下标不再发奖。
+
 ## 快速开始
 
 ### 1. 依赖

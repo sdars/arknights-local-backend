@@ -12,6 +12,7 @@ from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response
 from .. import (
     battles,
+    checkin as checkin_service,
     gacha_service,
     game_data,
     grants,
@@ -103,6 +104,7 @@ async def sync_data(request: Request):
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
     missions.ensure_mission_state(user)
+    checkin_service.ensure_state(user)
     status = user.setdefault("status", {})
     status["uid"] = str(account["uid"])
     status["nickName"] = account["nickname"] or "博士"
@@ -454,9 +456,10 @@ async def user_checkin(request: Request):
     if last_checkin and time.strftime("%Y-%m-%d", time.localtime(last_checkin)) == today:
         monthly_granted, monthly_delta = monthly_card.grant_daily(user, now=ts)
         delta = {"deleted": {}, "modified": {"checkIn": checkin_delta(checkin)}}
+        checkin_service.ensure_state(user)
+        delta["modified"]["openServerV3"] = user.get("openServerV3")
         grants.merge_delta(delta, monthly_delta)
-        if monthly_granted:
-            save_player(account, user)
+        save_player(account, user)
         return {
             "result": 0,
             "signInRewards": [],
@@ -480,6 +483,8 @@ async def user_checkin(request: Request):
     checkin["checkInRewardIndex"] = int(checkin.get("checkInRewardIndex", 0) or 0) + 1
     checkin["lastCheckInTs"] = ts
     delta["modified"]["checkIn"] = checkin_delta(checkin)
+    checkin_service.ensure_state(user)
+    delta["modified"]["openServerV3"] = user.get("openServerV3")
     monthly_granted, monthly_delta = monthly_card.grant_daily(user, now=ts)
     grants.merge_delta(delta, monthly_delta)
     save_player(account, user)
@@ -539,24 +544,27 @@ def _open_server_v3_claim(account, body):
     if not isinstance(v3, dict):
         v3 = {}
         user["openServerV3"] = v3
-    checkin = v3.setdefault("checkIn", {})
-    if not isinstance(checkin, dict):
-        checkin = {}
-        v3["checkIn"] = checkin
+    checkin, history = checkin_service.ensure_state(user)
     group_id = str(checkin.get("groupId") or "new_login_g_1")
-    checkin["groupId"] = group_id
-    history = checkin.get("history")
-    if not isinstance(history, list):
-        history = []
-        checkin["history"] = history
-    normalized = []
-    for value in history:
-        normalized.append(1 if _as_int(value, 1) else 0)
-    history[:] = normalized
+    day_count = max(1, len(
+        (game_data.open_server_v3_checkin_group(group_id) or {}).get("checkInItemList") or []
+    ))
 
-    index = _as_int(body.get("index"), 0)
+    index = _as_int(body.get("index"), -1)
     if index < 0:
-        index = next((i for i, value in enumerate(history) if value == 1), 0)
+        # The client sends -1 when the page opens and expects the next
+        # unclaimed day to be awarded.
+        index = next((i for i, value in enumerate(history) if value == 1), -1)
+    if index < 0 or index >= day_count:
+        return {
+            "result": 0,
+            "items": [],
+            "playerDataDelta": {
+                "deleted": {},
+                "modified": {"openServerV3": v3},
+            },
+            "pushMessage": [],
+        }
     while len(history) <= index:
         history.append(1)
 

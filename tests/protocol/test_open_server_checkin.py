@@ -24,6 +24,7 @@ def _reset_open_server(uid):
         "groupId": "new_login_g_1",
         "history": [1, 1],
     }
+    user.setdefault("checkIn", {})["checkInHistory"] = []
     user.setdefault("status", {})["gold"] = 10000
     _save_user(uid, user)
     return user
@@ -72,6 +73,7 @@ def test_open_server_checkin_grants_once_and_persists(client, login, test_accoun
 
 def test_legacy_open_server_checkin_route_and_day_two_inventory(client, login, test_account):
     _reset_open_server(test_account["uid"])
+    before_cards = int(_user(test_account["uid"]).get("inventory", {}).get("2003", 0) or 0)
     response = client.post(
         f"{client.base_url}/activity/getOpenServerCheckInReward",
         headers=login["headers"],
@@ -86,4 +88,65 @@ def test_legacy_open_server_checkin_route_and_day_two_inventory(client, login, t
 
     after = _user(test_account["uid"])
     assert after["openServerV3"]["checkIn"]["history"] == [1, 0]
-    assert after["inventory"]["2003"] == 20
+    assert after["inventory"]["2003"] == before_cards + 20
+
+
+def test_sync_backfills_cumulative_days_from_daily_signins(client, login, test_account):
+    user = _user(test_account["uid"])
+    user.setdefault("openServerV3", {})["checkIn"] = {
+        "groupId": "new_login_g_1",
+        "history": [0],
+    }
+    user.setdefault("checkIn", {})["checkInHistory"] = [0, 0, 0]
+    _save_user(test_account["uid"], user)
+
+    sync = client.post(
+        f"{client.base_url}/account/syncData",
+        headers=login["headers"],
+        json={},
+        timeout=15,
+    ).json()
+    assert sync["user"]["openServerV3"]["checkIn"]["history"] == [0, 1, 1]
+    assert _user(test_account["uid"])["openServerV3"]["checkIn"]["history"] == [0, 1, 1]
+
+
+def test_negative_index_claims_next_available_day(client, login, test_account):
+    user = _user(test_account["uid"])
+    user.setdefault("openServerV3", {})["checkIn"] = {
+        "groupId": "new_login_g_1",
+        "history": [0, 1],
+    }
+    user.setdefault("checkIn", {})["checkInHistory"] = [0, 0]
+    _save_user(test_account["uid"], user)
+
+    body = client.post(
+        f"{client.base_url}/openServerV3/getCheckInReward",
+        headers=login["headers"],
+        json={"index": -1},
+        timeout=15,
+    ).json()
+    assert body["result"] == 0
+    assert body["items"] == [{"id": "2003", "type": "CARD_EXP", "count": 20}]
+    assert body["playerDataDelta"]["modified"]["openServerV3"]["checkIn"]["history"] == [0, 0]
+    assert _user(test_account["uid"])["openServerV3"]["checkIn"]["history"] == [0, 0]
+
+    duplicate = client.post(
+        f"{client.base_url}/openServerV3/getCheckInReward",
+        headers=login["headers"],
+        json={"index": -1},
+        timeout=15,
+    ).json()
+    assert duplicate["items"] == []
+
+
+def test_out_of_range_checkin_index_never_grants(client, login, test_account):
+    _reset_open_server(test_account["uid"])
+    body = client.post(
+        f"{client.base_url}/openServerV3/getCheckInReward",
+        headers=login["headers"],
+        json={"index": 99},
+        timeout=15,
+    ).json()
+    assert body["result"] == 0
+    assert body["items"] == []
+    assert _user(test_account["uid"])["openServerV3"]["checkIn"]["history"] == [1, 1]

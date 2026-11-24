@@ -220,6 +220,197 @@ def _ensure_active_tier(user, mission_type):
                 node["state"] = 1
 
 
+def _guide_v3_progress(user, entry):
+    """Derive GUIDE_V3 progress from the player's real save."""
+    description = str(entry.get("description") or "")
+    jump_type = str(entry.get("jumpType") or "")
+    jump_place = str(entry.get("jumpPlace") or "")
+    stages = (user.get("dungeon") or {}).get("stages") or {}
+    chars = (user.get("troop") or {}).get("chars") or {}
+
+    def cleared(node):
+        return isinstance(node, dict) and (
+            int(node.get("state", 0) or 0) >= 3
+            or int(node.get("completeTimes", 0) or 0) > 0
+        )
+
+    # Challenge (突袭) clears live on the FOUR_STAR variant of a stage
+    # (main_00-01#f#), never on the NORMAL stage.  Handle this before the
+    # generic MAIN_STAGE rule or normal clears would falsely satisfy it.
+    if "突袭" in description:
+        match = re.search(r"EP(\d+)", description)
+        chapter = int(match.group(1)) if match else None
+        for stage_id, node in stages.items():
+            cfg = game_data.stage(stage_id) or {}
+            if str(cfg.get("difficulty") or "NORMAL").upper() == "NORMAL":
+                continue
+            code_match = re.match(r"(\d+)-", str(cfg.get("code") or ""))
+            if chapter is not None and (
+                not code_match or int(code_match.group(1)) != chapter
+            ):
+                continue
+            if cleared(node):
+                return (1, 1)
+        return (0, 1)
+
+    match = re.search(r"控制中枢升级至LV\.?(\d+)", description)
+    if match:
+        target = max(1, int(match.group(1)))
+        rooms = ((user.get("building") or {}).get("roomSlots")) or {}
+        for slot in rooms.values():
+            if not isinstance(slot, dict) or str(slot.get("roomId") or "") != "CONTROL":
+                continue
+            if int(slot.get("level", 0) or 0) >= target:
+                return (1, 1)
+        return (0, 1)
+
+    if "专精技能" in description:
+        for char in chars.values():
+            if not isinstance(char, dict):
+                continue
+            for skill in char.get("skills") or []:
+                if isinstance(skill, dict) and int(skill.get("specializeLevel", 0) or 0) > 0:
+                    return (1, 1)
+        return (0, 1)
+
+    if "购买任意商品" in description:
+        for shop_key in ("LS", "HS", "GP", "ES"):
+            section = (user.get("shop") or {}).get(shop_key) or {}
+            if not isinstance(section, dict):
+                continue
+            for bucket in section.values():
+                if not isinstance(bucket, dict):
+                    continue
+                info = bucket.get("info")
+                if isinstance(info, list) and any(
+                    isinstance(row, dict) and int(row.get("count", 1) or 0) > 0
+                    for row in info
+                ):
+                    return (1, 1)
+        return (0, 1)
+
+    if "芯片关" in description:
+        for stage_id, node in stages.items():
+            cfg = game_data.stage(stage_id) or {}
+            if not str(cfg.get("code") or "").startswith("PR-"):
+                continue
+            if cleared(node):
+                return (1, 1)
+        return (0, 1)
+
+    match = re.search(r"将任意(\d+)名干员的等级提升至精英1阶段(\d+)级", description)
+    if match:
+        need = max(1, int(match.group(1)))
+        level = int(match.group(2))
+        count = sum(
+            1
+            for char in chars.values()
+            if isinstance(char, dict)
+            and int(char.get("evolvePhase", 0) or 0) >= 1
+            and int(char.get("level", 1) or 1) >= level
+        )
+        return (min(count, need), need)
+
+    match = re.search(r"精英化，并提升至精英1阶段(\d+)级", description)
+    if match:
+        level = int(match.group(1))
+        for char in chars.values():
+            if not isinstance(char, dict):
+                continue
+            if int(char.get("evolvePhase", 0) or 0) >= 1 and int(char.get("level", 1) or 1) >= level:
+                return (1, 1)
+        return (0, 1)
+
+    match = re.search(r"将任意(\d+)名干员的技能提升至Rank(\d+)", description)
+    if match:
+        need = max(1, int(match.group(1)))
+        rank = int(match.group(2))
+        count = sum(
+            1
+            for char in chars.values()
+            if isinstance(char, dict) and int(char.get("mainSkillLvl", 1) or 1) >= rank
+        )
+        return (min(count, need), need)
+
+    if jump_type == "MAIN_STAGE" and jump_place:
+        node = stages.get(jump_place)
+        return (1 if cleared(node) else 0, 1)
+    match = re.search(r"将任意(\d+)名干员的等级提升至(\d+)级", description)
+    if match:
+        need = max(1, int(match.group(1)))
+        level = int(match.group(2))
+        count = 0
+        for char in chars.values():
+            if isinstance(char, dict) and int(char.get("level", 1) or 1) >= level:
+                count += 1
+        return (min(count, need), need)
+    match = re.search(r"博士等级达到(\d+)级", description)
+    if match:
+        target = max(1, int(match.group(1)))
+        level = int((user.get("status") or {}).get("level", 1) or 1)
+        return (min(level, target), target)
+    match = re.search(r"在资源收集中通过任意难度(\d+)的关卡", description)
+    if match:
+        difficulty = int(match.group(1))
+        for stage_id, node in stages.items():
+            cfg = game_data.stage(stage_id) or {}
+            code = str(cfg.get("code") or "")
+            if str(cfg.get("stageType") or "") != "DAILY":
+                continue
+            if not re.search(r"-" + str(difficulty) + r"$", code):
+                continue
+            if isinstance(node, dict) and (
+                int(node.get("state", 0) or 0) >= 3
+                or int(node.get("completeTimes", 0) or 0) > 0
+            ):
+                return (1, 1)
+        return (0, 1)
+    return None
+
+
+def ensure_guide_v3_state(user):
+    table = game_data.guide_v3_missions()
+    if not table:
+        return
+    bucket = mission_bucket(user, "GUIDE_V3", create=True)
+    for mission_id, entry in table.items():
+        if not isinstance(entry, dict):
+            continue
+        node = bucket.get(mission_id)
+        if not isinstance(node, dict):
+            node = {"state": 1, "progress": [{"value": 0, "target": 1}]}
+            bucket[mission_id] = node
+        if int(node.get("state", 0) or 0) == 3:
+            continue
+        derived = _guide_v3_progress(user, entry)
+        if derived is None:
+            if not isinstance(node.get("progress"), list) or not node["progress"]:
+                node["progress"] = [{"value": 0, "target": 1}]
+            continue
+        value, target = derived
+        node["progress"] = [{"value": int(value), "target": max(1, int(target))}]
+        node["state"] = 2 if value >= target else 1
+
+
+def current_guide_group(user):
+    """Return the earliest GUIDE_V3 stage that still has unfinished work."""
+    bucket = mission_bucket(user, "GUIDE_V3", create=False)
+    best_group = ""
+    best_sort = 10 ** 9
+    for mission_id, node in bucket.items():
+        if not isinstance(node, dict) or int(node.get("state", 0) or 0) == 3:
+            continue
+        entry = game_data.guide_v3_mission(mission_id) or {}
+        group_id = str(entry.get("missionGroup") or "")
+        if not group_id:
+            continue
+        sort_id = int((game_data.guide_v3_group(group_id) or {}).get("sortId") or 0)
+        if sort_id < best_sort:
+            best_sort = sort_id
+            best_group = group_id
+    return best_group
+
+
 def _sync_active_group_states(user, now=None):
     """Publish the groups that own today's DAILY/WEEKLY missions.
 
@@ -336,6 +527,7 @@ def ensure_mission_state(user):
                 node["state"] = 1
     for mission_type in ("DAILY", "WEEKLY"):
         _ensure_active_tier(user, mission_type)
+    ensure_guide_v3_state(user)
     # The template is also used by accounts that already cleared story
     # stages.  Restore the one-shot CompleteStage/CompleteMainStage missions
     # from the authoritative dungeon clear flags instead of leaving them at
@@ -522,7 +714,7 @@ def claim_missions(user, mission_ids, source="mission"):
         if not mission_id or mission_id in seen:
             continue
         seen.add(mission_id)
-        entry = game_data.mission(mission_id)
+        entry = game_data.mission(mission_id) or game_data.guide_v3_mission(mission_id)
         if not entry:
             skipped.append({"missionId": mission_id, "reason": "unknown"})
             continue
@@ -602,6 +794,16 @@ def auto_confirm(user, mission_type):
         bucket_types.append("SUB")
     elif mission_type == "GUIDE":
         bucket_types.append("GUIDE_V3")
+    if mission_type == "GUIDE_V3":
+        group = game_data.guide_v3_group(current_guide_group(user)) or {}
+        bucket = mission_bucket(user, "GUIDE_V3", create=False)
+        ids = [
+            mission_id
+            for mission_id in group.get("missionIds") or []
+            if isinstance(bucket.get(mission_id), dict)
+            and int(bucket[mission_id].get("state", 0) or 0) == 2
+        ]
+        return claim_missions(user, ids, source="mission-auto")
     ids = []
     for bucket_type in bucket_types:
         bucket = mission_bucket(user, bucket_type, create=False)
@@ -614,7 +816,7 @@ def auto_confirm(user, mission_type):
 
 
 def confirm_group(user, group_id):
-    group = game_data.mission_group(group_id)
+    group = game_data.mission_group(group_id) or game_data.guide_v3_group(group_id)
     if not group:
         return {"result": 1, "error": f"unknown mission group: {group_id}"}
     root = mission_root(user)
@@ -622,7 +824,7 @@ def confirm_group(user, group_id):
     if int(states.get(group_id, 0) or 0) == 1:
         return _success([], {"playerDataDelta": grants.empty_delta()})
     for mission_id in group.get("missionIds") or []:
-        entry = game_data.mission(mission_id) or {}
+        entry = game_data.mission(mission_id) or game_data.guide_v3_mission(mission_id) or {}
         bucket = mission_bucket(user, str(entry.get("type") or "").upper(), create=False)
         node = bucket.get(mission_id)
         if not isinstance(node, dict) or int(node.get("state", 0) or 0) != 3:

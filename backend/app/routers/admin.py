@@ -1028,25 +1028,37 @@ def _account_page_context(account):
         )
     mission_rows = []
     mission_root = user.get("mission") or {}
-    mission_order = {"MAIN": 0, "DAILY": 1, "WEEKLY": 2}
+    mission_order = {"MAIN": 0, "DAILY": 1, "WEEKLY": 2, "GUIDE_V3": 3}
+    guide_group = missions.current_guide_group(user)
     for mission_type, bucket in (mission_root.get("missions") or {}).items():
         if mission_type not in mission_order or not isinstance(bucket, dict):
             continue
         for mission_id, node in bucket.items():
             if not isinstance(node, dict):
                 continue
-            entry = game_data.mission(mission_id) or {}
+            entry = (
+                game_data.mission(mission_id)
+                or game_data.guide_v3_mission(mission_id)
+                or {}
+            )
             progress = node.get("progress") or []
             first = progress[0] if progress and isinstance(progress[0], dict) else {}
             value = _int(first.get("value"), 0)
             target = max(1, _int(first.get("target"), 1))
             state = _int(node.get("state"), 0)
+            visible = state == 2
+            if mission_type == "GUIDE_V3":
+                visible = (
+                    state in (1, 2)
+                    and str(entry.get("missionGroup") or "") == guide_group
+                )
             mission_rows.append(
                 {
                     "type": mission_type,
                     "id": str(mission_id),
                     "name": entry.get("description") or str(mission_id),
                     "state": state,
+                    "visible": visible,
                     "value": value,
                     "target": target,
                     "claimable": state == 2 and value >= target,
@@ -1056,7 +1068,14 @@ def _account_page_context(account):
     mission_rows.sort(
         key=lambda row: (
             mission_order.get(row["type"], 9),
-            _int((game_data.mission(row["id"]) or {}).get("sortId"), 0),
+            _int(
+                (
+                    game_data.mission(row["id"])
+                    or game_data.guide_v3_mission(row["id"])
+                    or {}
+                ).get("sortId"),
+                0,
+            ),
             row["id"],
         )
     )
@@ -1485,7 +1504,11 @@ async def account_mission_progress(
     if not account:
         return RedirectResponse("/admin/accounts", status_code=303)
     mission_id = str(mission_id or "").strip()
-    entry = game_data.mission(mission_id) or {}
+    entry = (
+        game_data.mission(mission_id)
+        or game_data.guide_v3_mission(mission_id)
+        or {}
+    )
     if not entry:
         _flash(request, f"任务不存在：{mission_id}")
         return RedirectResponse(f"/admin/accounts/{uid}#missions", status_code=303)

@@ -370,3 +370,97 @@ def test_daily_claim_all_advances_each_family_and_awards_points():
     assert daily["daily_7007"]["state"] == 2
     assert user["mission"]["missionRewards"]["dailyPoint"] == before_point + 2
     assert "mission" in result["playerDataDelta"]["modified"]
+
+
+def test_guide_v3_progress_is_derived_from_stage_and_operator_data():
+    user = _template()
+    user.setdefault("dungeon", {}).setdefault("stages", {})["main_00-01"] = {
+        "state": 3,
+        "completeTimes": 1,
+        "stageId": "main_00-01",
+    }
+    for char in (user.get("troop") or {}).get("chars", {}).values():
+        char["level"] = 1
+    first = next(iter((user["troop"]["chars"]).values()))
+    first["level"] = 20
+    missions.ensure_mission_state(user)
+    guide = user["mission"]["missions"]["GUIDE_V3"]
+    assert guide["newguide_1_1"]["state"] == 2
+    assert guide["newguide_1_1"]["progress"] == [{"value": 1, "target": 1}]
+    assert guide["newguide_1_5"]["state"] == 2
+    assert guide["newguide_1_5"]["progress"] == [{"value": 1, "target": 1}]
+    assert guide["newguide_1_6"]["state"] == 1
+    assert guide["newguide_1_6"]["progress"] == [{"value": 1, "target": 3}]
+
+
+def test_guide_v3_claim_grants_and_marks_finished():
+    user = _template()
+    user.setdefault("dungeon", {}).setdefault("stages", {})["main_00-01"] = {
+        "state": 3,
+        "completeTimes": 1,
+        "stageId": "main_00-01",
+    }
+    missions.ensure_mission_state(user)
+    result = missions.claim_missions(user, ["newguide_1_1"])
+    assert result["claimed"] == ["newguide_1_1"]
+    assert user["mission"]["missions"]["GUIDE_V3"]["newguide_1_1"]["state"] == 3
+    assert any(item["type"] == "OPEN_SERVER_CREDIT" for item in result["items"])
+
+
+def test_guide_v3_derives_e1_shop_building_and_challenge_conditions():
+    user = _template()
+    chars = user.setdefault("troop", {}).setdefault("chars", {})
+    for char in chars.values():
+        char["level"] = 1
+        char["evolvePhase"] = 0
+        char["mainSkillLvl"] = 1
+        char["skills"] = []
+    first = next(iter(chars.values()))
+    first.update({"level": 90, "evolvePhase": 2})
+    user.setdefault("shop", {}).setdefault("GP", {})["monthly"] = {
+        "info": [{"id": "GP_gM_96_M_1", "count": 1}],
+    }
+    rooms = user.setdefault("building", {}).setdefault("roomSlots", {})
+    rooms["slot_34"] = {"roomId": "CONTROL", "level": 4}
+    stages = user.setdefault("dungeon", {}).setdefault("stages", {})
+    stages["main_00-01"] = {"state": 3, "completeTimes": 1, "stageId": "main_00-01"}
+
+    missions.ensure_mission_state(user)
+    guide = user["mission"]["missions"]["GUIDE_V3"]
+    assert guide["newguide_4_7"]["state"] == 2
+    assert guide["newguide_5_6"]["state"] == 2
+    assert guide["newguide_6_5"]["state"] == 2
+    assert guide["newguide_2_4"]["state"] == 2
+    assert guide["newguide_3_3"]["state"] == 2
+    assert guide["newguide_6_1"]["state"] == 2
+    # A normal clear must not satisfy the challenge-mode task.
+    assert guide["newguide_5_3"]["state"] == 1
+
+    stages["main_00-01#f#"] = {
+        "state": 3,
+        "completeTimes": 1,
+        "stageId": "main_00-01#f#",
+    }
+    missions.ensure_mission_state(user)
+    assert user["mission"]["missions"]["GUIDE_V3"]["newguide_5_3"]["state"] == 2
+
+
+def test_guide_auto_confirm_only_claims_current_stage():
+    user = _template()
+    chars = user.setdefault("troop", {}).setdefault("chars", {})
+    for char in chars.values():
+        char["level"] = 1
+        char["evolvePhase"] = 0
+    first = next(iter(chars.values()))
+    first["level"] = 60
+    user.setdefault("dungeon", {}).setdefault("stages", {})["main_00-01"] = {
+        "state": 3,
+        "completeTimes": 1,
+        "stageId": "main_00-01",
+    }
+
+    result = missions.auto_confirm(user, "GUIDE_V3")
+    guide = user["mission"]["missions"]["GUIDE_V3"]
+    assert "newguide_1_1" in result["claimed"]
+    assert "newguide_2_6" not in result["claimed"]
+    assert guide["newguide_2_6"]["state"] == 2

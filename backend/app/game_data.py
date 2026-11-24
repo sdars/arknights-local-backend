@@ -42,6 +42,32 @@ def mission_group(group_id):
     return (mission_table().get("missionGroups") or {}).get(str(group_id or ""))
 
 
+def guide_v3_missions():
+    table = excel("open_server_table.json") or {}
+    data = (table.get("openServerV3Data") or {}).get("missionData") or {}
+    return data if isinstance(data, dict) else {}
+
+
+def guide_v3_mission(mission_id):
+    return guide_v3_missions().get(str(mission_id or ""))
+
+
+def guide_v3_group(group_id):
+    group_id = str(group_id or "")
+    table = excel("open_server_table.json") or {}
+    data = (table.get("openServerV3Data") or {}).get("missionGroupData") or {}
+    group = data.get(group_id)
+    if not isinstance(group, dict):
+        return None
+    mission_ids = [
+        str(mission_id)
+        for mission_id, mission in guide_v3_missions().items()
+        if isinstance(mission, dict) and str(mission.get("missionGroup") or "") == group_id
+    ]
+    mission_ids.sort(key=lambda mid: int((guide_v3_mission(mid) or {}).get("sortId") or 0))
+    return {**group, "missionIds": mission_ids}
+
+
 def periodical_reward(reward_id):
     table = mission_table()
     for key in ("periodicalRewards", "weeklyRewards"):
