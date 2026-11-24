@@ -1,3 +1,4 @@
+import logging
 import time
 
 from fastapi import FastAPI, Request
@@ -12,6 +13,7 @@ from . import battles, mail_service, payments
 from .routers import admin, config_api, game, sdk
 
 app = FastAPI(title="Arknights Local Backend", docs_url=None, redoc_url=None)
+logger = logging.getLogger(__name__)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
@@ -83,6 +85,7 @@ app.include_router(game.router)
 async def fallback(path: str, request: Request):
     if path.startswith("admin") or path.startswith("static"):
         return JSONResponse({"error": "not found"}, status_code=404)
+    logger.warning("unmatched route: %s /%s uid=%s", request.method, path, request.headers.get("uid"))
     return {
         "result": 0,
         "playerDataDelta": {"deleted": {}, "modified": {}},

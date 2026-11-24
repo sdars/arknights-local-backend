@@ -182,6 +182,7 @@ def _ensure_skin(user):
     skin = _dict(user, "skin")
     _dict(skin, "skinTs")
     _dict(skin, "characterSkins")
+    _dict(skin, "skinSp")
     return skin
 
 

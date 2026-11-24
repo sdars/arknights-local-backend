@@ -133,6 +133,11 @@ async def sync_data(request: Request):
     last_checkin = int(checkin.get("lastCheckInTs", 0) or 0)
     if not last_checkin or time.strftime("%Y-%m-%d", time.localtime(last_checkin)) != time.strftime("%Y-%m-%d", time.localtime(ts)):
         checkin["canCheckIn"] = 1
+    skin = user.setdefault("skin", {})
+    skin.setdefault("characterSkins", {})
+    skin.setdefault("skinTs", {})
+    skin.setdefault("skinSp", {})
+    _repair_char_skins(user)
     save_player(account, user)
     return {"result": 0, "ts": ts, "user": user, **empty_delta()}
 
@@ -175,6 +180,11 @@ async def sync_status(request: Request):
     modules = _as_int(body.get("modules"), 0) if isinstance(body, dict) else 0
     if modules & 2048:
         result["2048"] = {"gacha": [], "shop": []}
+    skin_state = user.setdefault("skin", {})
+    skin_state.setdefault("characterSkins", {})
+    skin_state.setdefault("skinTs", {})
+    skin_state.setdefault("skinSp", {})
+    _repair_char_skins(user)
     save_player(account, user)
     modified = {
         key: user.get(key)
@@ -1351,6 +1361,66 @@ def _char_by_inst(user, inst_id):
     return chars.get(str(inst_id)), chars
 
 
+def _owned_skins(user):
+    return ((user.get("skin") or {}).get("characterSkins") or {})
+
+
+def _skin_meta(skin_id):
+    table = game_data.excel("skin_table.json") or {}
+    return (table.get("charSkins") or {}).get(str(skin_id or "")) or {}
+
+
+def _char_templates(char, char_id):
+    """Template ids usable by a character instance (base + unlocked forms)."""
+    ids = {str(char_id)}
+    current = str((char or {}).get("currentTmpl") or "")
+    if current:
+        ids.add(current)
+    tmpl = (char or {}).get("tmpl")
+    if isinstance(tmpl, dict):
+        ids.update(str(key) for key in tmpl)
+    return ids
+
+
+def _skin_allowed(user, char, skin_id):
+    """Default, built-in (non-shop) and purchased skins may be equipped."""
+    char_id = str((char or {}).get("charId") or "")
+    skin_id = str(skin_id or "")
+    if not char_id or not skin_id:
+        return False
+    templates = _char_templates(char, char_id)
+    if skin_id in {f"{template}#1" for template in templates}:
+        return True
+    meta = _skin_meta(skin_id)
+    if meta:
+        belongs = str(meta.get("charId") or "") == char_id and str(meta.get("tmplId") or char_id) in templates
+        if not belongs:
+            return False
+        if not meta.get("isBuySkin"):
+            return True
+    return skin_id in _owned_skins(user)
+
+
+def _repair_char_skins(user):
+    """Reset equipped skins that are neither default nor owned."""
+    changed = False
+    for char in ((user.get("troop") or {}).get("chars") or {}).values():
+        if not isinstance(char, dict):
+            continue
+        char_id = str(char.get("charId") or "")
+        if not char_id:
+            continue
+        default_tmpl = str(char.get("currentTmpl") or char_id)
+        default = f"{default_tmpl}#1"
+        if not _skin_meta(default):
+            default = f"{char_id}#1"
+        skin = str(char.get("skin") or "")
+        if skin and skin != default and not _skin_allowed(user, char, skin):
+            char["skin"] = default
+            changed = True
+    return changed
+
+
 def _sync_skill_unlocks(char, meta):
     phase = _as_int(char.get("evolvePhase"), 0)
     skills = char.get("skills")
@@ -1815,7 +1885,7 @@ async def char_build_batch_voice(request: Request):
     return await char_build_set_voice(request)
 
 
-@router.post("/charBuild/changeSkinSpState")
+@router.post("/charBuild/changeCharSkin")
 async def char_build_change_skin(request: Request):
     account = auth(request)
     if not account:
@@ -1824,12 +1894,64 @@ async def char_build_change_skin(request: Request):
     user = player_data(account)
     inst_id = str(body.get("charInstId") or "")
     char, _ = _char_by_inst(user, inst_id)
-    if isinstance(char, dict):
-        skin = body.get("skinId") or body.get("skin")
-        if skin:
-            char["skin"] = str(skin)
+    skin_id = str(body.get("skinId") or body.get("skin") or "")
+    logger.info("changeCharSkin uid=%s body=%s", account["uid"], body)
+    if not isinstance(char, dict) or not skin_id:
+        return {"result": 1, "error": "invalid char or skin", **empty_delta()}
+    if not _skin_allowed(user, char, skin_id):
+        logger.info("changeCharSkin rejected: uid=%s skin=%s not owned", account["uid"], skin_id)
+        return {"result": 1, "error": "skin not owned", **empty_delta()}
+    if str(char.get("skin") or "") != skin_id:
+        char["skin"] = skin_id
         save_player(account, user)
     return _char_response(user, inst_id, char_fields=("skin",))
+
+
+@router.post("/charBuild/changeSkinSpState")
+async def char_build_change_skin_sp_state(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    skin_id = str(body.get("skinId") or "")
+    if not skin_id:
+        return {"result": 1, "error": "invalid skin", **empty_delta()}
+    skin = user.setdefault("skin", {})
+    skin_sp = skin.get("skinSp")
+    if not isinstance(skin_sp, dict):
+        skin_sp = {}
+        skin["skinSp"] = skin_sp
+    skin_sp[skin_id] = bool(body.get("isSpecial"))
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"skin": skin}}}
+
+
+@router.post("/char/changeMarkStar")
+async def char_change_mark_star(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    entries = body.get("set") if isinstance(body, dict) else None
+    entries = entries if isinstance(entries, dict) else {}
+    chars = (user.get("troop") or {}).get("chars") or {}
+    changed = {}
+    for raw_inst, raw_state in entries.items():
+        inst = str(raw_inst)
+        char = chars.get(inst)
+        if not isinstance(char, dict):
+            continue
+        state = 1 if _as_int(raw_state, 0) else 0
+        char["starMark"] = state
+        changed[inst] = {"starMark": state}
+    if changed:
+        save_player(account, user)
+    return {
+        "result": 0,
+        "playerDataDelta": {"deleted": {}, "modified": {"troop": {"chars": changed}} if changed else {}},
+    }
 
 
 @router.post("/charBuild/upgradeSpecializedSkillUseItem")
