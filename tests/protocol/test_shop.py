@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 
 from conftest import DB_PATH
 
@@ -47,6 +48,28 @@ def test_cash_good_list_has_goods(client, login):
     assert len(body["goodList"]) == 6
     assert body["goodList"][0]["goodId"] == "CS_1_r7"
     assert body["playerDataDelta"] == {"deleted": {}, "modified": {}}
+
+
+def test_skin_goods_normalize_expired_countdown(client, login):
+    body = client.post(
+        f"{client.base_url}/shop/getSkinGoodList",
+        headers=login["headers"],
+        json={},
+        timeout=15,
+    ).json()
+    now = int(time.time())
+    goods = body["goodList"]
+    assert len(goods) == 289
+    assert not [
+        row
+        for row in goods
+        if row.get("endDateTime") is not None and int(row["endDateTime"]) <= now
+    ]
+    assert any(row.get("endDateTime") is None for row in goods)
+    assert any(
+        row.get("endDateTime") is not None and int(row["endDateTime"]) > now
+        for row in goods
+    )
 
 
 def test_shop_lists_are_populated(client, login):

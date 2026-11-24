@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from ..config import BATTLE_START_TEMPLATE
 from ..db import now_ts
 from ..services import account_by_token, player_data, save_player, touch_login
-from ..shop_fixtures import shop_response
+from ..shop_fixtures import shop_response, skin_good_list as load_skin_goods
 from .. import (
     battles,
     checkin as checkin_service,
@@ -1010,7 +1010,7 @@ async def classic_good_list():
 
 @router.post("/shop/getSkinGoodList")
 async def skin_good_list():
-    return shop_response("SkinGoodList.json")
+    return load_skin_goods()
 
 
 @router.post("/shop/getFurniGoodList")
