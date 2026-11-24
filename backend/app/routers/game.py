@@ -619,6 +619,88 @@ def _open_server_v3_claim(account, body):
     return response
 
 
+def _open_server_v3_milestone(account, body):
+    user = player_data(account)
+    v3 = user.setdefault("openServerV3", {})
+    if not isinstance(v3, dict):
+        v3 = {}
+        user["openServerV3"] = v3
+    mission = v3.setdefault("mission", {})
+    if not isinstance(mission, dict):
+        mission = {}
+        v3["mission"] = mission
+    milestone = mission.setdefault("milestone", {})
+    if not isinstance(milestone, dict):
+        milestone = {}
+        mission["milestone"] = milestone
+    group_id = str(milestone.get("groupId") or "new_bp_g_1")
+    milestone["groupId"] = group_id
+    point = max(0, _as_int(milestone.get("point"), 0))
+    got = milestone.get("got")
+    if not isinstance(got, list):
+        got = []
+        milestone["got"] = got
+    got_levels = set()
+    for value in got:
+        try:
+            got_levels.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    groups = game_data.open_server_v3_data().get("milestoneGroupData") or {}
+    group = groups.get(group_id) or {}
+    entries = [row for row in group.get("itemList") or [] if isinstance(row, dict)]
+    current_level = 0
+    for row in entries:
+        level = _as_int(row.get("level"), 0)
+        need = _as_int(row.get("pointCnt"), 0)
+        if need <= point:
+            current_level = max(current_level, level)
+    requested = body.get("levels")
+    if isinstance(requested, list):
+        wanted = {_as_int(value, 0) for value in requested}
+        wanted.discard(0)
+    elif requested is not None:
+        wanted = {_as_int(requested, 0)}
+        wanted.discard(0)
+    else:
+        wanted = set()
+    rewards = []
+    claimed = []
+    for row in entries:
+        level = _as_int(row.get("level"), 0)
+        if level <= 0 or level > current_level or level in got_levels:
+            continue
+        if wanted and level not in wanted:
+            continue
+        reward = row.get("reward") or {}
+        item = {
+            "id": str(reward.get("id") or ""),
+            "type": str(reward.get("type") or ""),
+            "count": _as_int(reward.get("count"), 0),
+        }
+        if not item["id"] or not item["type"] or item["count"] <= 0:
+            continue
+        rewards.append(item)
+        claimed.append(level)
+    granted, delta = grants.apply_items(
+        user, rewards, source="open-server-v3-milestone", now=now_ts()
+    )
+    got_levels.update(claimed)
+    milestone["got"] = sorted(got_levels)
+    delta.setdefault("deleted", {})
+    delta.setdefault("modified", {})["openServerV3"] = v3
+    save_player(account, user)
+    response = {
+        "result": 0,
+        "items": granted,
+        "playerDataDelta": delta,
+        "pushMessage": [],
+    }
+    if granted:
+        response["reward"] = granted[0]
+    return response
+
+
 @router.post("/openServerV3/getCheckInReward")
 async def open_server_v3_checkin_reward(request: Request):
     account = auth(request)
@@ -629,6 +711,30 @@ async def open_server_v3_checkin_reward(request: Request):
     except Exception:
         body = {}
     return _open_server_v3_claim(account, body)
+
+
+@router.post("/openServerV3/getMilestoneReward")
+async def open_server_v3_milestone_reward(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return _open_server_v3_milestone(account, body)
+
+
+@router.post("/activity/getOpenServerMilestoneReward")
+async def activity_open_server_milestone(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return _open_server_v3_milestone(account, body)
 
 
 @router.post("/activity/getOpenServerCheckInReward")
