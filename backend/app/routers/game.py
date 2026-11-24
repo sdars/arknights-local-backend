@@ -202,6 +202,7 @@ async def sync_status(request: Request):
             "recruit",
             "exgachadata",
             "mission",
+            "charRotation",
         )
         if key in user
     }
@@ -1952,6 +1953,171 @@ async def char_change_mark_star(request: Request):
         "result": 0,
         "playerDataDelta": {"deleted": {}, "modified": {"troop": {"chars": changed}} if changed else {}},
     }
+
+
+CHAR_ROTATION_FLAG_NAME = 1
+CHAR_ROTATION_FLAG_BACKGROUND = 2
+CHAR_ROTATION_FLAG_HOME_THEME = 4
+CHAR_ROTATION_FLAG_SECRETARY = 8
+CHAR_ROTATION_FLAG_SLOTS = 16
+
+
+def _char_rotation_state(user):
+    """Return (rotation, presets) with a usable current preset."""
+    rotation = user.get("charRotation")
+    if not isinstance(rotation, dict):
+        rotation = {}
+        user["charRotation"] = rotation
+    presets = rotation.get("preset")
+    if not isinstance(presets, dict):
+        presets = {}
+        rotation["preset"] = presets
+    if not presets:
+        preset_id = "1"
+        presets[preset_id] = {
+            "name": "未命名界面配置",
+            "background": "bg_rhodes_day",
+            "homeTheme": "tm_rhodes_day",
+            "profile": "",
+            "profileSp": False,
+            "slots": [],
+        }
+        rotation["current"] = preset_id
+    current = str(rotation.get("current") or "")
+    if current not in presets:
+        rotation["current"] = str(next(iter(presets)))
+    return rotation, presets
+
+
+def _next_rotation_preset_id(presets):
+    numeric = [int(key) for key in presets if str(key).isdigit()]
+    candidate = max(numeric, default=0) + 1
+    while str(candidate) in presets:
+        candidate += 1
+    return str(candidate)
+
+
+def _clean_preset_name(raw, fallback):
+    """Keep a readable name; the client can send '?' when its encoding breaks."""
+    name = str(raw or "").strip()
+    if name and not set(name) <= {"?"}:
+        return name
+    previous = str(fallback or "").strip()
+    if previous and not set(previous) <= {"?"}:
+        return previous
+    return "未命名界面配置"
+
+
+def _rotation_slots(user, raw_slots):
+    slots = []
+    for raw in raw_slots if isinstance(raw_slots, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        char_id = str(raw.get("charId") or "")
+        if not char_id:
+            continue
+        slots.append(
+            {
+                "charId": char_id,
+                "skinId": str(raw.get("skinId") or f"{char_id}#1"),
+                "skinSp": bool(raw.get("skinSp")),
+            }
+        )
+    return slots
+
+
+@router.post("/charRotation/createPreset")
+async def char_rotation_create_preset(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    user = player_data(account)
+    rotation, presets = _char_rotation_state(user)
+    inst_id = _next_rotation_preset_id(presets)
+    presets[inst_id] = {
+        "name": "未命名界面配置",
+        "background": "bg_rhodes_day",
+        "homeTheme": "tm_rhodes_day",
+        "profile": "",
+        "profileSp": False,
+        "slots": [],
+    }
+    save_player(account, user)
+    return {"result": 0, "instId": inst_id, "playerDataDelta": {"deleted": {}, "modified": {"charRotation": rotation}}}
+
+
+@router.post("/charRotation/deletePreset")
+async def char_rotation_delete_preset(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    rotation, presets = _char_rotation_state(user)
+    inst_id = str(body.get("instId") or "")
+    if inst_id not in presets:
+        return {"result": 1, "error": "preset not found", **empty_delta()}
+    if len(presets) <= 1:
+        return {"result": 1, "error": "last preset", **empty_delta()}
+    presets.pop(inst_id, None)
+    if str(rotation.get("current") or "") == inst_id:
+        rotation["current"] = str(next(iter(presets)))
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"charRotation": rotation}}}
+
+
+@router.post("/charRotation/setCurrent")
+async def char_rotation_set_current(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    user = player_data(account)
+    rotation, presets = _char_rotation_state(user)
+    inst_id = str(body.get("instId") or "")
+    if inst_id not in presets:
+        return {"result": 1, "error": "preset not found", **empty_delta()}
+    rotation["current"] = inst_id
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"charRotation": rotation}}}
+
+
+@router.post("/charRotation/updatePreset")
+async def char_rotation_update_preset(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    body = await request.json()
+    logger.info("charRotation updatePreset uid=%s body=%s", account["uid"], body)
+    user = player_data(account)
+    rotation, presets = _char_rotation_state(user)
+    inst_id = str(body.get("instId") or rotation.get("current") or "")
+    preset = presets.get(inst_id)
+    if not isinstance(preset, dict):
+        return {"result": 1, "error": "preset not found", **empty_delta()}
+    flag = _as_int(body.get("flag"), 0)
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    if flag & CHAR_ROTATION_FLAG_NAME:
+        preset["name"] = _clean_preset_name(data.get("name"), preset.get("name") or "未命名界面配置")
+    if flag & CHAR_ROTATION_FLAG_BACKGROUND:
+        preset["background"] = str(data.get("background") or preset.get("background") or "")
+    if flag & CHAR_ROTATION_FLAG_HOME_THEME:
+        preset["homeTheme"] = str(data.get("homeTheme") or preset.get("homeTheme") or "")
+    if flag & CHAR_ROTATION_FLAG_SECRETARY:
+        skin_id = str(data.get("profile") or data.get("secretarySkinId") or "")
+        inst = str(data.get("profileInst") or data.get("secretaryCharInstId") or "")
+        if not skin_id and inst:
+            char, _ = _char_by_inst(user, inst)
+            if isinstance(char, dict):
+                skin_id = str(char.get("skin") or f"{char.get('charId')}#1")
+        preset["profile"] = skin_id
+        preset["profileSp"] = bool(data.get("profileSp") or data.get("secretaryShowSpDynIllust"))
+        if inst:
+            preset["profileInst"] = inst
+    if flag & CHAR_ROTATION_FLAG_SLOTS:
+        preset["slots"] = _rotation_slots(user, data.get("slots"))
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"charRotation": rotation}}}
 
 
 @router.post("/charBuild/upgradeSpecializedSkillUseItem")
