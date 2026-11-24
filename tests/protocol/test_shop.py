@@ -1,8 +1,15 @@
 import json
 import sqlite3
+import sys
 import time
+from pathlib import Path
 
 from conftest import DB_PATH
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "backend"))
+
+from app import game_data  # noqa: E402
 
 
 SHOP_ENDPOINTS = [
@@ -59,7 +66,7 @@ def test_skin_goods_normalize_expired_countdown(client, login):
     ).json()
     now = int(time.time())
     goods = body["goodList"]
-    assert len(goods) == 289
+    assert len(goods) == 165
     assert not [
         row
         for row in goods
@@ -70,6 +77,10 @@ def test_skin_goods_normalize_expired_countdown(client, login):
         row.get("endDateTime") is not None and int(row["endDateTime"]) > now
         for row in goods
     )
+    skins = (game_data.excel("skin_table.json") or {}).get("charSkins") or {}
+    for row in goods:
+        display = (skins.get(row["skinId"]) or {}).get("displaySkin") or {}
+        assert "采购中心" in str(display.get("obtainApproach") or "")
 
 
 def test_shop_lists_are_populated(client, login):
