@@ -161,6 +161,11 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_mail_instances_uid
                 ON mail_instances(uid, removed, create_at DESC);
+            CREATE TABLE IF NOT EXISTS player_sync_snapshots (
+                account_id INTEGER PRIMARY KEY,
+                snapshot_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             """
         )
         order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}

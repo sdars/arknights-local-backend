@@ -107,10 +107,22 @@ def test_create_set_current_and_delete_preset(client, login, test_account):
 
 
 def test_sync_status_exposes_char_rotation(client, login):
+    # The periodic sync is incremental.  Change the stored rotation directly
+    # (the same path the admin console uses) and verify it is surfaced.
+    uid = int(login["headers"]["uid"])
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT user_json FROM accounts WHERE uid=?", (uid,)).fetchone()
+        user = json.loads(row[0])
+        presets = user.setdefault("charRotation", {}).setdefault("preset", {})
+        presets["sync_probe"] = {"name": "sync probe"}
+        conn.execute(
+            "UPDATE accounts SET user_json=? WHERE uid=?",
+            (json.dumps(user, ensure_ascii=False, separators=(",", ":")), uid),
+        )
     body = client.post(
         f"{client.base_url}/account/syncStatus",
         headers=login["headers"],
         json={"modules": 0, "params": {}},
         timeout=15,
     ).json()
-    assert "charRotation" in body["playerDataDelta"]["modified"]
+    assert body["playerDataDelta"]["modified"]["charRotation"]["preset"]["sync_probe"] == {"name": "sync probe"}

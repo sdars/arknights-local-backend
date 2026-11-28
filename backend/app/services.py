@@ -6,6 +6,7 @@ from .config import PLAYER_TEMPLATE, SERVER_NAME
 from .db import connect, now_ts
 from .missions import ensure_mission_state
 from .security import new_token
+from . import player_sync
 
 
 _template_cache = None
@@ -80,6 +81,9 @@ def save_player(account, user):
             "UPDATE accounts SET user_json=?, nickname=? WHERE uid=?",
             (json.dumps(user, ensure_ascii=False, separators=(",", ":")), user.get("status", {}).get("nickName", account["nickname"]), account["uid"]),
         )
+        # The caller is returning this state to the client.  Keep a cursor for
+        # the next periodic sync so unchanged polls produce an empty delta.
+        player_sync.store_snapshot(conn, account["id"], user)
 
 
 def touch_login(account, device_id=None, ip=None, platform=None):

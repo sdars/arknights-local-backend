@@ -34,7 +34,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 签到：`/user/checkIn` 与累计签到 `/openServerV3/getCheckInReward`；累计签到按 `open_server_table.json` 发奖，写 `checkIn.history` 的 0/1 领取状态，重复请求不重复发放，并兼容 `/activity/getOpenServerCheckInReward`
 - 商店：13 个 `/shop/get*GoodList`、`/shop/getGoodPurchaseState`，覆盖现金、组合包、时装、家具、社交与经典商店；已实现资质/高级/采购凭证/中坚/EPGS/信用/家具/皮肤购买，限购次数按“剩余可购买数”写入 `shop.*.info` 并通过 `syncStatus` 模块 16 回传
 - 寻访：`/gacha/getPoolDetail`、`/gacha/advancedGacha`、`/gacha/tenAdvancedGacha`、公开招募同步；支持卡池概率、UP、价格、保底、开放时间、新卡池与干员入库
-- 干员：`/charBuild/upgradeChar`、`evolveChar`、`upgradeSkill`、潜能、技能、装备、皮肤与语音；在线 `syncStatus` / `syncPushMessage` 会回传后台修改后的完整状态
+- 干员：`/charBuild/upgradeChar`、`evolveChar`、`upgradeSkill`、潜能、技能、装备、皮肤与语音；在线 `syncStatus` / `syncPushMessage` 按“上次已下发状态”做增量同步，后台改动会在下一次轮询出现，未变化时返回空 delta
 - 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号；源石商品按 `CashGoodList.json` 的 `doubleCount` / `diamondNum + plusNum` 发放，旧 `CS_*_r3~r6` 商品 ID 映射到当前档位；月卡激活 30 天订阅并发放当日每日奖励；所有订单用 `granted_items_json` 防止重复
 - 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、后台自动同步官方版本（ETag/304、失败不覆盖）、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
 - 官方客户端接入：Magisk/APatch `ark-local` 模块（systemless hosts、mitmproxy CA、443→8444 relay、app UID `ARK_LOCAL` nat 链）；`scripts/build_ark_module.sh` / `install_ark_module.sh` / `ark_module_status.sh`

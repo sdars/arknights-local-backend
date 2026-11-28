@@ -68,6 +68,7 @@ def test_account(client):
                 conn.execute("DELETE FROM battle_records WHERE account_id=?", (account_id,))
                 conn.execute("DELETE FROM orders WHERE account_id=?", (account_id,))
                 conn.execute("DELETE FROM sessions WHERE account_id=?", (account_id,))
+                conn.execute("DELETE FROM player_sync_snapshots WHERE account_id=?", (account_id,))
                 tables = {
                     row[0]
                     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()

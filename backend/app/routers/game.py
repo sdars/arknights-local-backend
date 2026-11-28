@@ -22,6 +22,8 @@ from .. import (
     missions,
     monthly_card,
     payments,
+    player_delta,
+    player_sync,
     runtime_settings,
     shop_service,
     social as social_service,
@@ -154,6 +156,8 @@ async def sync_status(request: Request):
     except Exception:
         body = {}
     user = player_data(account)
+    previous = player_sync.load_snapshot(account["id"])
+    baseline = copy.deepcopy(previous if previous is not None else user)
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
     missions.ensure_mission_state(user)
@@ -189,31 +193,12 @@ async def sync_status(request: Request):
     _repair_char_skins(user)
     equipment_state.ensure_user_equipment(user)
     save_player(account, user)
-    modified = {
-        key: user.get(key)
-        for key in (
-            "status",
-            "pushFlags",
-            "troop",
-            "inventory",
-            "gacha",
-            "shop",
-            "dungeon",
-            "skin",
-            "dexNav",
-            "consumable",
-            "recruit",
-            "exgachadata",
-            "mission",
-            "charRotation",
-        )
-        if key in user
-    }
+    delta = player_delta.sync_delta(baseline, user)
     return {
         "result": result,
         "ts": ts,
         "pushMessage": [],
-        "playerDataDelta": {"deleted": {}, "modified": modified},
+        "playerDataDelta": delta,
     }
 
 
@@ -223,6 +208,8 @@ async def sync_push_message(request: Request):
     if not account:
         return {"result": 2, "error": "invalid token"}
     user = player_data(account)
+    previous = player_sync.load_snapshot(account["id"])
+    baseline = copy.deepcopy(previous if previous is not None else user)
     battles.reconcile_tutorial_state(user)
     gacha_service.ensure_gacha_state(user)
     missions.ensure_mission_state(user)
@@ -236,14 +223,7 @@ async def sync_push_message(request: Request):
         "now": ts,
         "next": ts + 60,
         "pushMessage": [],
-        "playerDataDelta": {
-            "deleted": {},
-            "modified": {
-                key: user.get(key)
-                for key in ("status", "pushFlags", "troop", "inventory", "gacha", "shop", "dungeon", "skin", "dexNav", "consumable")
-                if key in user
-            },
-        },
+        "playerDataDelta": player_delta.sync_delta(baseline, user),
     }
 
 
@@ -262,12 +242,9 @@ async def battle_start(request: Request):
     battle_id = stage
     template["battleId"] = battle_id
     template["result"] = 0
-    modified = template.setdefault("playerDataDelta", {}).setdefault("modified", {})
-    status = modified.setdefault("status", {})
-    status["uid"] = str(account["uid"])
-    status["nickName"] = account["nickname"] or "博士"
-    status["serverName"] = runtime_settings.values()["server_name"]
     user = player_data(account)
+    previous = player_sync.load_snapshot(account["id"])
+    baseline = copy.deepcopy(previous if previous is not None else user)
     stages_user = user.setdefault("dungeon", {}).setdefault("stages", {})
     stage_node = stages_user.get(stage)
     if not isinstance(stage_node, dict):
@@ -283,8 +260,9 @@ async def battle_start(request: Request):
     stage_node["startTimes"] = int(stage_node.get("startTimes", 0) or 0) + 1
     save_player(account, user)
     battles.record_battle_start(account["id"], battle_id, stage, payload=body)
-    stages = modified.setdefault("dungeon", {}).setdefault("stages", {})
-    stages[stage] = stage_node
+    template["playerDataDelta"] = player_delta.expand_dungeon_stages(
+        player_delta.compute_delta(baseline, user), user
+    )
     return template
 
 

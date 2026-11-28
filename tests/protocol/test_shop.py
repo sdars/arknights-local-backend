@@ -39,8 +39,9 @@ def test_sync_status_returns_result_object(client, login):
     assert isinstance(body["result"], dict)
     assert isinstance(body["ts"], int)
     assert body["playerDataDelta"]["deleted"] == {}
-    assert "status" in body["playerDataDelta"]["modified"]
-    assert "troop" in body["playerDataDelta"]["modified"]
+    # An unchanged poll must be empty; the client treats a non-empty delta as
+    # a reason to show its data-resync prompt.
+    assert body["playerDataDelta"]["modified"] == {}
 
 
 def test_cash_good_list_has_goods(client, login):

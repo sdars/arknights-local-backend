@@ -1,4 +1,5 @@
 import base64
+import copy
 import datetime
 import gzip
 import hashlib
@@ -12,7 +13,7 @@ import zlib
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from . import game_data, grants, missions
+from . import game_data, grants, missions, player_delta, player_sync
 from .db import connect, now_ts
 from .services import account_by_uid, player_data, save_player
 
@@ -535,6 +536,8 @@ def finish_battle(account, body):
             return {"result": 2, "error": "account not found"}
         user = player_data(fresh)
         missions.ensure_mission_state(user)
+        previous = player_sync.load_snapshot(fresh["id"])
+        baseline = copy.deepcopy(previous if previous is not None else user)
         push_flags = user.get("pushFlags") or {}
         decrypted = decrypt_battle_data(body.get("data"), push_flags.get("status", ""))
         decode = decrypted or {}
@@ -600,8 +603,6 @@ def finish_battle(account, body):
             stage_node["battleReplay"] = replay
 
         response = _default_response()
-        delta = response["playerDataDelta"]
-        delta["modified"]["dungeon"] = user.get("dungeon", {})
 
         if passed:
             scale = 1.2 if complete_state == 3 else 1.0
@@ -615,11 +616,9 @@ def finish_battle(account, body):
             first_items = game_data.first_clear_rewards(stage_id) if first_clear else []
             _grant_player_exp(user, exp)
 
-            _, item_delta = grants.apply_items(
+            grants.apply_items(
                 user, reward_items + first_items + additional, source="battle"
             )
-            grants.merge_delta(delta, item_delta)
-            delta["modified"]["status"] = user.get("status", {})
             response["rewards"] = reward_items
             response["firstRewards"] = first_items
             response["additionalRewards"] = additional
@@ -639,20 +638,13 @@ def finish_battle(account, body):
                 unlocked.append(target)
             if unlocked:
                 response["unlockStages"] = unlocked
-                delta["modified"]["dungeon"] = user.get("dungeon", {})
 
             completed_missions = missions.record_stage_clear(
                 user, stage_id, complete_state, kill_count=kill_count, assist=assist
             )
             next_main_stage = advance_mainline_after_clear(user, stage_id)
-            if completed_missions:
-                delta["modified"]["mission"] = user.get("mission", {})
             if next_main_stage:
                 response["nextStage"] = next_main_stage
-            if next_main_stage or completed_missions:
-                delta["modified"]["status"] = user.get("status", {})
-                delta["modified"]["dungeon"] = user.get("dungeon", {})
-                delta["modified"]["mission"] = user.get("mission", {})
 
         record_battle_result(
             fresh,
@@ -664,6 +656,9 @@ def finish_battle(account, body):
             complete_state,
             decode,
             body,
+        )
+        response["playerDataDelta"] = player_delta.expand_dungeon_stages(
+            player_delta.compute_delta(baseline, user), user
         )
         save_player(fresh, user)
         _close_battle((session or {}).get("battle_id") or battle_id or None)
