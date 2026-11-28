@@ -1,8 +1,14 @@
+import base64
+import datetime
+import gzip
 import hashlib
+import io
 import json
 import re
 import threading
 import time
+import zipfile
+import zlib
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -12,6 +18,15 @@ from .services import account_by_uid, player_data, save_player
 
 
 LOG_TOKEN_KEY = "pM6Umv*^hVQuB6t&"
+BATTLE_REPLAY_ENTRY = "default_entry"
+BATTLE_REPLAY_PLANS = {
+    "main_00-11": [
+        {"char_id": "char_264_f12yin", "row": 4, "col": 4, "direction": 3, "timestamp": 1.5},
+        {"char_id": "char_180_amgoat", "row": 5, "col": 6, "direction": 0, "timestamp": 24.0},
+        {"char_id": "char_204_platnm", "row": 5, "col": 5, "direction": 0, "timestamp": 38.0},
+        {"char_id": "char_4081_warmy", "row": 6, "col": 5, "direction": 3, "timestamp": 58.0},
+    ],
+}
 _lock = threading.Lock()
 
 PLAYER_EXP = [
@@ -174,30 +189,23 @@ def get_battle_record(record_id):
 
 
 def save_battle_replay(user, battle_replay):
-    """Store the base64 zip replay on its stage and mirror it in the record log."""
+    """Store the base64 replay on its stage and mirror it in the record log."""
     if not isinstance(battle_replay, str) or not battle_replay:
         return {"result": 1, "error": "battleReplay is empty"}
-    stage_id = ""
-    payload = None
+    encoded = battle_replay.strip()
+    raw = None
     try:
-        import base64
-        import io
-        import zipfile
-
-        raw = base64.b64decode(battle_replay)
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            for name in archive.namelist():
-                try:
-                    payload = json.loads(archive.read(name).decode("utf-8"))
-                    break
-                except Exception:
-                    continue
-        if isinstance(payload, dict):
-            journal = payload.get("journal") or {}
-            metadata = journal.get("metadata") or {}
-            stage_id = str(metadata.get("stageId") or payload.get("stageId") or "")
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_")
     except Exception:
-        payload = None
+        raw = None
+    if raw is None and encoded.startswith("{"):
+        raw = encoded.encode("utf-8")
+    stage_id = ""
+    for candidate in _battle_replay_payloads(raw) if raw is not None else ():
+        candidate_stage = _battle_replay_stage(candidate)
+        if candidate_stage:
+            stage_id = candidate_stage
+            break
     if not stage_id:
         return {"result": 1, "error": "cannot resolve replay stage"}
     stages = _dict(_dict(user, "dungeon"), "stages")
@@ -214,6 +222,54 @@ def save_battle_replay(user, battle_replay):
     }
 
 
+def _battle_replay_payloads(raw):
+    """Yield JSON payloads from zip, gzip, zlib/deflate, or plain text."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            names = sorted(archive.namelist(), key=lambda name: ("journal" not in name.lower(), name))
+            for name in names:
+                try:
+                    value = json.loads(archive.read(name).decode("utf-8"))
+                except Exception:
+                    continue
+                if isinstance(value, dict):
+                    yield value
+    except Exception:
+        pass
+    for decoder in (gzip.decompress, zlib.decompress, lambda data: zlib.decompress(data, -15)):
+        try:
+            value = json.loads(decoder(raw).decode("utf-8"))
+        except Exception:
+            continue
+        if isinstance(value, dict):
+            yield value
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except Exception:
+        value = None
+    if isinstance(value, dict):
+        yield value
+
+
+def _battle_replay_stage(payload):
+    if not isinstance(payload, dict):
+        return ""
+    journal = payload.get("journal")
+    if isinstance(journal, dict):
+        metadata = journal.get("metadata")
+        if isinstance(metadata, dict):
+            stage_id = metadata.get("stageId")
+            if stage_id:
+                return str(stage_id)
+    for key in ("stageId", "stage_id"):
+        if payload.get(key):
+            return str(payload[key])
+    battle_log = payload.get("battleLog")
+    if isinstance(battle_log, dict):
+        return _battle_replay_stage(battle_log)
+    return ""
+
+
 def load_battle_replay(user, stage_id):
     stages = ((user.get("dungeon") or {}).get("stages")) or {}
     node = stages.get(str(stage_id or ""))
@@ -227,6 +283,189 @@ def load_battle_replay(user, stage_id):
     }
 
 
+def _first_unlocked_skill(char):
+    for skill in (char or {}).get("skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        if int(skill.get("unlock", 0) or 0) == 1 and skill.get("skillId"):
+            return str(skill["skillId"])
+    return ""
+
+
+def _replay_char_pool(user):
+    chars = ((user.get("troop") or {}).get("chars") or {})
+    by_char_id = {}
+    for inst_id, char in chars.items():
+        if not isinstance(char, dict):
+            continue
+        char_id = str(char.get("charId") or "")
+        if not char_id:
+            continue
+        item = dict(char)
+        item["instId"] = int(char.get("instId") or inst_id or 0)
+        by_char_id[char_id] = item
+    return by_char_id
+
+
+def _replay_squad_char(char_id, char):
+    meta = game_data.character(char_id) or {}
+    phases = meta.get("phases") if isinstance(meta.get("phases"), list) else []
+    phase = min(2, max(0, len(phases) - 1))
+    phase_cfg = phases[phase] if phase < len(phases) and isinstance(phases[phase], dict) else {}
+    max_level = max(1, int(phase_cfg.get("maxLevel") or 1))
+    # Replay characters are allowed to be stronger than the current save, but
+    # never above the phase's real level cap (a 5-star at level 90 indexes past
+    # the client's stat curve and crashes the native battle loader).
+    level = max_level
+    return {
+        "charInstId": int(char.get("instId") or 0),
+        "skinId": str(char.get("skin") or f"{char_id}#1"),
+        "tmplId": str(char.get("currentTmpl") or ""),
+        "skillId": _first_unlocked_skill(char),
+        "skillIndex": 0,
+        "skillLvl": 7,
+        "level": level,
+        "phase": phase,
+        "potentialRank": int(char.get("potentialRank", 0) or 0),
+        "favorBattlePhase": 0,
+        "isAssistChar": False,
+        "uniequipId": "",
+        "uniequipLevel": 0,
+    }
+
+
+def build_battle_replay(user, stage_id, complete_state=3):
+    """Build a client-compatible ``battleReplay`` for an admin-generated clear.
+
+    The official client stores a replay as ``base64(zip(default_entry -> JSON))``.
+    For main_00-11 we ship a deterministic opening plan on the real map tiles
+    (the map is sourced from the stage's level asset), so auto-deploy starts with
+    an actual deployment sequence instead of an empty placeholder log.
+    """
+    stage_id = str(stage_id or "")
+    stage_cfg = game_data.stage(stage_id) or {}
+    chars = _replay_char_pool(user)
+    by_inst = {int(char.get("instId") or 0): char for char in chars.values()}
+    plan = BATTLE_REPLAY_PLANS.get(stage_id) or []
+    squad_chars = []
+    seen = set()
+
+    # The replay squad must carry every operator of the player's current squad,
+    # even the ones that never get deployed.  Keep the recorded deployment
+    # order first (matching official replays), then append the remaining squad
+    # slots so the client can resolve every slot when proxy is toggled.
+    selected = []
+    for entry in plan:
+        char = chars.get(str(entry.get("char_id") or ""))
+        if not char or char["instId"] in {item[0]["instId"] for item in selected}:
+            continue
+        selected.append((char, entry))
+        if char["instId"] not in seen:
+            seen.add(char["instId"])
+            squad_chars.append(char)
+
+    squad_cfg = (((user.get("troop") or {}).get("squads") or {}).get("0") or {})
+    slots = squad_cfg.get("slots") if isinstance(squad_cfg, dict) else []
+    for slot in slots or []:
+        if not isinstance(slot, dict):
+            continue
+        try:
+            inst_id = int(slot.get("charInstId") or 0)
+        except (TypeError, ValueError):
+            continue
+        char = by_inst.get(inst_id)
+        if char and inst_id not in seen:
+            seen.add(inst_id)
+            squad_chars.append(char)
+
+    if not selected:
+        # Generic fallback: use the account's current squad.  This still gives
+        # the client a valid replay object and unlocks the proxy-command button;
+        # stage-specific opening plans add real deployments.
+        for slot in slots or []:
+            if not isinstance(slot, dict):
+                continue
+            try:
+                inst_id = int(slot.get("charInstId") or 0)
+            except (TypeError, ValueError):
+                continue
+            char = by_inst.get(inst_id)
+            if char and char["instId"] not in seen:
+                seen.add(char["instId"])
+                squad_chars.append(char)
+                selected.append((char, None))
+            if len(squad_chars) >= 6:
+                break
+    if not squad_chars:
+        squad_chars = sorted(chars.values(), key=lambda c: (-int(c.get("evolvePhase", 0) or 0), -int(c.get("level", 0) or 0)))[:6]
+    if not squad_chars:
+        return ""
+
+    squad = [_replay_squad_char(str(char.get("charId") or ""), char) for char in squad_chars]
+    logs = []
+    for char, entry in selected:
+        char_id = str(char.get("charId") or "")
+        if entry:
+            logs.append({
+                "timestamp": float(entry.get("timestamp", 0.0) or 0.0),
+                "signiture": {
+                    "uniqueId": int(char.get("instId") or 0),
+                    "charId": char_id,
+                },
+                "op": 0,
+                "direction": int(entry.get("direction", 1) or 0),
+                "pos": {
+                    "row": int(entry.get("row", 0) or 0),
+                    "col": int(entry.get("col", 0) or 0),
+                },
+                "extraInfo": "",
+            })
+    logs.sort(key=lambda item: float(item["timestamp"]))
+    last_log_time = float(logs[-1]["timestamp"]) if logs else 0.0
+    now = datetime.datetime.now().astimezone().replace(microsecond=0)
+    payload = {
+        "campaignOnlyVersion": 0,
+        "timestamp": str(int(time.time())),
+        "journal": {
+            "metadata": {
+                "standardPlayTime": last_log_time + (25.0 if stage_id == "main_00-11" else 1.0),
+                "gameResult": 1 if int(complete_state or 0) >= 2 else 2,
+                "saveTime": now.isoformat(),
+                "remainingCost": 0,
+                "remainingLifePoint": 10,
+                "killedEnemiesCnt": 37 if stage_id == "main_00-11" else 0,
+                "missedEnemiesCnt": 0,
+                "levelId": str(stage_cfg.get("levelId") or stage_id),
+                "stageId": stage_id,
+                "validKilledEnemiesCnt": 37 if stage_id == "main_00-11" else 0,
+            },
+            "squad": squad,
+            "logs": logs,
+            "randomSeed": 0,
+            "runeList": [],
+        },
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(BATTLE_REPLAY_ENTRY, json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def attach_battle_replay(user, stage_id, battle_replay):
+    if not isinstance(battle_replay, str) or not battle_replay:
+        return {"result": 1, "error": "battleReplay is empty"}
+    stages = _dict(_dict(user, "dungeon"), "stages")
+    node = _stage_entry(stages, str(stage_id or ""))
+    node["hasBattleReplay"] = 1
+    node["battleReplay"] = battle_replay
+    return {
+        "result": 0,
+        "stageId": str(stage_id or ""),
+        "playerDataDelta": {
+            "deleted": {},
+            "modified": {"dungeon": {"stages": {str(stage_id or ""): node}}},
+        },
+    }
 def _grant_player_exp(user, amount):
     if amount <= 0:
         return
@@ -354,6 +593,11 @@ def finish_battle(account, body):
             stage_node["state"] = max(int(stage_node.get("state", 0) or 0), complete_state)
         else:
             stage_node["state"] = max(1, int(stage_node.get("state", 0) or 0))
+
+        replay = body.get("battleReplay") or decode.get("battleReplay")
+        if passed and isinstance(replay, str) and replay:
+            stage_node["hasBattleReplay"] = 1
+            stage_node["battleReplay"] = replay
 
         response = _default_response()
         delta = response["playerDataDelta"]

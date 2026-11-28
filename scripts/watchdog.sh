@@ -33,6 +33,18 @@ rotate_log() {
   fi
 }
 
+ensure_disk_space() {
+  local used
+  used=$(df -P / | awk 'NR == 2 { gsub(/%/, "", $5); print $5 }')
+  if [[ "$used" =~ ^[0-9]+$ ]] && (( used >= 95 )); then
+    log "disk usage ${used}%, vacuuming journals and expired thumbnails"
+    journalctl --vacuum-size=512M >/dev/null 2>&1 || true
+    find backend/data/gallery_thumbnails -type f -mtime +30 -delete 2>/dev/null || true
+    used=$(df -P / | awk 'NR == 2 { gsub(/%/, "", $5); print $5 }')
+    log "disk usage after maintenance: ${used}%"
+  fi
+}
+
 adb_state() {
   timeout 10 adb -s "$ADB_SERIAL" get-state 2>/dev/null | tr -d '\r' || true
 }
@@ -72,9 +84,17 @@ ensure_proxy_off() {
 
 ensure_hosts() {
   local hosts=(openapi.alipay.com as.hypergryph.com game-config.hypergryph.com ak-conf.hypergryph.com launcher.hypergryph.com ak-webview.hypergryph.com)
-  # /system is normally read-only. Keep a writable copy and bind-mount it over
-  # /system/etc/hosts so the mapping survives package restarts and watchdogs.
-  local script="cp /system/etc/hosts /data/local/tmp/hosts.ark 2>/dev/null || true; for h in ${hosts[*]}; do grep -q \"^127\\.0\\.0\\.1 \$h\$\" /data/local/tmp/hosts.ark || echo \"127.0.0.1 \$h\" >> /data/local/tmp/hosts.ark; done; mount --bind /data/local/tmp/hosts.ark /system/etc/hosts 2>/dev/null || true; grep -q 'openapi.alipay.com' /system/etc/hosts"
+  local module_hosts=/data/adb/modules/ark-local/system/etc/hosts
+  local script
+  if timeout 10 adb -s "$ADB_SERIAL" shell "su -M -c '[ -f $module_hosts ]'" >/dev/null 2>&1; then
+    # The module owns a system_file-context hosts file; netd can read it,
+    # unlike /data/local/tmp/hosts.ark which is shell_data_file.
+    script="src=\$(stat -c '%d:%i' $module_hosts 2>/dev/null); dst=\$(stat -c '%d:%i' /system/etc/hosts 2>/dev/null); if [ \"\$src\" != \"\$dst\" ]; then chcon u:object_r:system_file:s0 $module_hosts 2>/dev/null || true; mount --bind $module_hosts /system/etc/hosts 2>/dev/null || true; fi; grep -q 'openapi.alipay.com' /system/etc/hosts"
+  else
+    # /system is normally read-only. Keep a writable copy and bind-mount it over
+    # /system/etc/hosts so the mapping survives package restarts and watchdogs.
+    script="[ -f /data/local/tmp/hosts.ark ] || cp /system/etc/hosts /data/local/tmp/hosts.ark 2>/dev/null || true; for h in ${hosts[*]}; do grep -q \"^127\\.0\\.0\\.1 \$h\$\" /data/local/tmp/hosts.ark || echo \"127.0.0.1 \$h\" >> /data/local/tmp/hosts.ark; done; src=\$(stat -c '%d:%i' /data/local/tmp/hosts.ark 2>/dev/null); dst=\$(stat -c '%d:%i' /system/etc/hosts 2>/dev/null); if [ \"\$src\" != \"\$dst\" ]; then mount --bind /data/local/tmp/hosts.ark /system/etc/hosts 2>/dev/null || true; fi; grep -q 'openapi.alipay.com' /system/etc/hosts"
+  fi
   if ! timeout 15 adb -s "$ADB_SERIAL" shell "su -M -c '$script'" >/dev/null 2>&1; then
     log "WARN: could not ensure device hosts mapping (root/mount may be unavailable)"
   fi
@@ -178,6 +198,7 @@ ensure_mitm() {
 
 check_once() {
   rotate_log
+  ensure_disk_space
   ensure_adb || return 1
   ensure_reverse "$SERVER_HTTP_PORT" "$SERVER_HTTP_PORT" || return 1
   ensure_reverse "$DEVICE_SDK_PORT" "$MITM_REVERSE_PORT" || return 1

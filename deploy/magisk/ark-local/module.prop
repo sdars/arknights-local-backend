@@ -1,0 +1,6 @@
+id=ark-local
+name=Arknights Local Backend Bridge
+version=1.0.0
+versionCode=1
+author=Arknights Local Backend
+description=Systemless hosts + local CA + device-side 443 relay + app-scoped routes for the local Arknights backend. Does not modify the game APK.

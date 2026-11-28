@@ -36,6 +36,32 @@
 </section>
 
 <section class="panel">
+  <div class="panel-head"><h2>官方版本自动同步</h2><span class="muted">后台定时检查，失败不会覆盖当前版本</span></div>
+  <dl class="kv">
+    <dt>自动同步</dt><dd>{% if sync_status.enabled %}<span class="status s2">已开启</span>{% else %}<span class="status s4">已关闭</span>{% endif %}{% if sync_status.running %} <span class="muted">正在同步</span>{% endif %}</dd>
+    <dt>最近检查</dt><dd class="mono">{{ sync_status.last_attempt or '-' }}</dd>
+    <dt>最近成功</dt><dd class="mono">{{ sync_status.last_success or '-' }}</dd>
+    <dt>检查结果</dt><dd>{{ sync_status.last_status_label }}{% if sync_status.last_duration_ms %} <span class="muted">({{ sync_status.last_duration_ms }} ms)</span>{% endif %}</dd>
+    <dt>官方客户端版本</dt><dd class="mono">{{ sync_status.official_client_version or '-' }}</dd>
+    <dt>官方资源版本</dt><dd class="mono">{{ sync_status.official_res_version or '-' }}</dd>
+    <dt>下次自动检查</dt><dd class="mono">{{ sync_status.next_run or '未排程' }}</dd>
+  </dl>
+  {% if sync_status.last_error %}<div class="alert">{{ sync_status.last_error }}</div>{% endif %}
+  <form class="form-grid" method="post" action="/admin/settings/official-sync">
+    <label class="check span-all"><input type="checkbox" name="official_sync_enabled" value="1" {% if sync_status.enabled %}checked{% endif %}> 启用后台自动同步</label>
+    <label class="span-all">官方版本接口<input class="mono" name="official_sync_url" value="{{ sync_status.url }}" required></label>
+    <label>检查间隔（分钟）<input type="number" name="official_sync_interval_minutes" min="1" max="1440" value="{{ sync_status.interval_minutes }}" required></label>
+    <label class="check"><input type="checkbox" name="official_sync_client" value="1" {% if sync_status.client %}checked{% endif %}> 同步客户端版本</label>
+    <label class="check"><input type="checkbox" name="official_sync_res" value="1" {% if sync_status.res %}checked{% endif %}> 同步资源版本</label>
+    <div class="actions span-all">
+      <button type="submit" name="op" value="save">保存自动同步设置</button>
+      <button class="primary" type="submit" name="op" value="sync" {% if sync_status.running %}disabled{% endif %}>立即同步</button>
+    </div>
+    <p class="muted span-all small-note">默认每小时检查一次官方 Android 版本接口，支持 ETag/304；失败后最多 5 分钟重试。开启“强制客户端版本一致”时，同步到新客户端版本会让旧 APK 无法登录，可单独关闭“同步客户端版本”。</p>
+  </form>
+</section>
+
+<section class="panel">
   <div class="panel-head"><h2>资源分发状态</h2><span class="muted">{{ asset_status.files }} 个文件</span></div>
   <dl class="kv">
     <dt>资源根目录</dt><dd class="mono">{{ asset_status.root or '未配置' }}</dd>

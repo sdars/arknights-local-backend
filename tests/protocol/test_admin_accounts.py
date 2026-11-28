@@ -2,6 +2,9 @@ import json
 import os
 import sqlite3
 import time
+import base64
+import io
+import zipfile
 from pathlib import Path
 
 
@@ -36,6 +39,12 @@ def test_account_console_status_inventory_and_assets(client, test_account, login
     assert page.status_code == 200
     for anchor in ("profile", "currency", "inventory", "assets", "operators", "squads", "mail", "advanced"):
         assert f'id="{anchor}"' in page.text
+    assert 'name="action" value="potential"' in page.text
+    assert "保存潜能" in page.text
+    assert 'name="action" value="skill"' in page.text
+    assert "保存技能等级" in page.text
+    assert 'name="action" value="module"' in page.text
+    assert "模组管理" in page.text
 
     before = sync_user(client, login)["status"]["mainStageProgress"]
     status = {
@@ -174,6 +183,24 @@ def test_account_console_operators_squads_and_protocol(client, test_account, log
     assert added
     inst_id = added[0][0]
 
+    potential = client.post(
+        f"{client.base_url}/admin/accounts/{uid}/operator/{inst_id}",
+        data={"action": "potential", "potentialRank": "4"},
+        allow_redirects=False,
+        timeout=20,
+    )
+    assert potential.status_code == 303
+    assert sync_user(client, login)["troop"]["chars"][inst_id]["potentialRank"] == 4
+
+    skill = client.post(
+        f"{client.base_url}/admin/accounts/{uid}/operator/{inst_id}",
+        data={"action": "skill", "mainSkillLvl": "6"},
+        allow_redirects=False,
+        timeout=20,
+    )
+    assert skill.status_code == 303
+    assert sync_user(client, login)["troop"]["chars"][inst_id]["mainSkillLvl"] == 6
+
     update = client.post(
         f"{client.base_url}/admin/accounts/{uid}/operator/{inst_id}",
         data={
@@ -196,6 +223,86 @@ def test_account_console_operators_squads_and_protocol(client, test_account, log
     assert char["potentialRank"] == 5
     assert char["mainSkillLvl"] == 7
     assert char["favorPoint"] == 200
+    # Elite 2 must also expose the module slots and select a base module.
+    assert char["equip"]["uniequip_001_kalts"]["hide"] == 0
+    assert char["equip"]["uniequip_001_kalts"]["locked"] == 0
+    assert char["equip"]["uniequip_002_kalts"]["hide"] == 0
+    assert char["equip"]["uniequip_002_kalts"]["locked"] == 1
+    assert char["currentEquip"] == "uniequip_001_kalts"
+
+    # Login sync repairs a legacy character whose equipment map was empty.
+    with sqlite3.connect(DB_PATH) as conn:
+        raw = conn.execute("SELECT user_json FROM accounts WHERE uid=?", (int(uid),)).fetchone()[0]
+        legacy = json.loads(raw)
+        legacy_char = legacy["troop"]["chars"][inst_id]
+        legacy_char["equip"] = {}
+        legacy_char["currentEquip"] = None
+        conn.execute(
+            "UPDATE accounts SET user_json=? WHERE uid=?",
+            (json.dumps(legacy, ensure_ascii=False, separators=(",", ":")), int(uid)),
+        )
+    user = sync_user(client, login)
+    char = user["troop"]["chars"][inst_id]
+    assert char["currentEquip"] == "uniequip_001_kalts"
+    assert char["equip"]["uniequip_001_kalts"]["hide"] == 0
+    assert char["equip"]["uniequip_002_kalts"]["hide"] == 0
+    assert char["equip"]["uniequip_001_kalts"]["locked"] == 0
+    assert char["equip"]["uniequip_002_kalts"]["locked"] == 1
+
+    page = client.get(f"{client.base_url}/admin/accounts/{uid}?module={inst_id}", timeout=20)
+    assert page.status_code == 200
+    assert 'name="action" value="module"' in page.text
+    assert "uniequip_001_kalts" in page.text
+    assert "全部解锁并满级" in page.text
+
+    module_save = client.post(
+        f"{client.base_url}/admin/accounts/{uid}/operator/{inst_id}",
+        data={
+            "action": "module",
+            "mode": "save",
+            "currentEquip": "uniequip_002_kalts",
+            "unlocked_uniequip_001_kalts": "1",
+            "level_uniequip_001_kalts": "3",
+            "level_uniequip_002_kalts": "3",
+            "level_uniequip_003_kalts": "2",
+        },
+        allow_redirects=False,
+        timeout=20,
+    )
+    assert module_save.status_code == 303
+    char = sync_user(client, login)["troop"]["chars"][inst_id]
+    assert char["currentEquip"] == "uniequip_002_kalts"
+    assert char["equip"]["uniequip_001_kalts"]["locked"] == 0
+    assert char["equip"]["uniequip_001_kalts"]["level"] == 1
+    assert char["equip"]["uniequip_002_kalts"]["locked"] == 0
+    assert char["equip"]["uniequip_002_kalts"]["level"] == 3
+    assert char["equip"]["uniequip_003_kalts"]["locked"] == 1
+    assert char["equip"]["uniequip_003_kalts"]["level"] == 2
+
+    module_unlock = client.post(
+        f"{client.base_url}/admin/accounts/{uid}/operator/{inst_id}",
+        data={"action": "module", "mode": "unlock_all"},
+        allow_redirects=False,
+        timeout=20,
+    )
+    assert module_unlock.status_code == 303
+    char = sync_user(client, login)["troop"]["chars"][inst_id]
+    assert all(slot["locked"] == 0 for slot in char["equip"].values())
+    assert char["equip"]["uniequip_001_kalts"]["level"] == 1
+    assert char["equip"]["uniequip_002_kalts"]["level"] == 3
+
+    module_max = client.post(
+        f"{client.base_url}/admin/accounts/{uid}/operator/{inst_id}",
+        data={"action": "module", "mode": "max_all"},
+        allow_redirects=False,
+        timeout=20,
+    )
+    assert module_max.status_code == 303
+    char = sync_user(client, login)["troop"]["chars"][inst_id]
+    for module_id, slot in char["equip"].items():
+        assert slot["locked"] == 0
+        assert slot["level"] == (1 if module_id == "uniequip_001_kalts" else 3)
+    assert char["currentEquip"] == "uniequip_002_kalts"
 
     inst_ids = [key for key, value in user["troop"]["chars"].items() if isinstance(value, dict)]
     assert len(inst_ids) >= 2
@@ -267,3 +374,41 @@ def test_account_console_operators_squads_and_protocol(client, test_account, log
     assert inst_id not in user["troop"]["chars"]
     for squad_data in user["troop"]["squads"].values():
         assert all(slot is None or str(slot.get("charInstId")) != inst_id for slot in squad_data.get("slots") or [])
+
+
+def test_account_console_generates_battle_record(client, test_account, login):
+    admin_login(client)
+    uid = test_account["uid"]
+    response = client.post(
+        f"{client.base_url}/admin/accounts/{uid}/battle/generate",
+        data={"stage_id": "0-2", "complete_state": "3", "with_replay": "1"},
+        allow_redirects=False,
+        timeout=30,
+    )
+    assert response.status_code == 303
+    user = sync_user(client, login)
+    stage = user["dungeon"]["stages"]["main_00-02"]
+    assert stage["state"] == 3
+    assert stage["completeTimes"] >= 1
+    # The generator now writes a decodable proxy-command replay alongside the clear.
+    assert stage["hasBattleReplay"] == 1
+    assert stage["battleReplay"]
+    raw = base64.b64decode(stage["battleReplay"] + "=" * (-len(stage["battleReplay"]) % 4))
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        assert "default_entry" in archive.namelist()
+        replay = json.loads(archive.read("default_entry"))
+    assert replay["journal"]["metadata"]["stageId"] == "main_00-02"
+    assert replay["journal"]["metadata"]["gameResult"] == 1
+    assert replay["journal"]["squad"]
+    with sqlite3.connect(DB_PATH) as conn:
+        record = conn.execute(
+            "SELECT stage_id,complete_state,result,payload_json FROM battle_records "
+            "WHERE uid=? AND stage_id=? ORDER BY id DESC LIMIT 1",
+            (int(uid), "main_00-02"),
+        ).fetchone()
+    assert record is not None
+    assert record[0] == "main_00-02"
+    assert record[1] == 3
+    assert record[2] == "win"
+    payload = json.loads(record[3])
+    assert payload["_battleFinish"]["adminGenerated"] is True

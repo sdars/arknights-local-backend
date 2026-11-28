@@ -18,6 +18,7 @@ logs/
 # Python self-hosted backend runtime state
 backend/data/*.sqlite3
 backend/data/*.sqlite3-*
+backend/data/gallery_thumbnails/
 backend/server.log
 backend/**/__pycache__/
 backend/__pycache__/

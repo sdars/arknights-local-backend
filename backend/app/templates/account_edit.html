@@ -37,6 +37,7 @@
   <a href="#inventory">库存</a>
   <a href="#assets">皮肤 / 头像</a>
   <a href="#operators">干员</a>
+  <a href="#battle-generator">对局生成</a>
   <a href="#squads">编队</a>
   <a href="#mail">邮件</a>
   <a href="#orders">订单</a>
@@ -87,7 +88,7 @@
     {{ number_field('progress', '进度值', status.get('progress', 0)) }}
     <label>终端当前关卡<input value="{{ status.get('mainStageProgress', '') }}" readonly></label>
     <label>设置已通关至<input name="mainlineTarget" value="" placeholder="0-10 / main_00-10"></label>
-    <p class="muted small-note span-all">“设置已通关至”会把目标及其之前的主线关卡、符合条件的训练关标记为通关，终端当前关卡自动推进到下一关；留空不会改动主线。保存货币等其它字段不会误通关当前关卡。</p>
+    <p class="muted small-note span-all">“设置已通关至”会把目标及其之前的主线关卡、符合条件的训练关标记为通关并显示三星状态，终端当前关卡自动推进到下一关；它不会生成代理指挥回放，代理指挥仍需在客户端实际三星通关并上传回放后解锁。留空不会改动主线，保存货币等其它字段不会误通关当前关卡。</p>
     <p class="muted small-note span-all">主线共 {{ mainline_summary.chapters }} 章 / {{ mainline_summary.stages }} 关；已通过 {{ mainline_summary.completed }} 关，当前位置 {{ mainline_summary.current or '-' }}。</p>
     <label>助理干员<input name="secretary" value="{{ status.get('secretary', '') }}" list="char-catalog"></label>
     <label>助理皮肤<input name="secretarySkinId" value="{{ status.get('secretarySkinId', '') }}" list="skin-catalog"></label>
@@ -264,21 +265,91 @@
   </form>
   <div class="operator-list">
   {% for row in character_rows %}
-    <article class="subpanel operator-card">
+    <article class="subpanel operator-card" id="operator-{{ row.instId }}">
       <header>
         <div><strong>{{ row.name }}</strong><div class="mono muted">#{{ row.instId }} · {{ row.charId }}</div></div>
         <div class="actions">
           <span class="pill">Lv.{{ row.level }}</span>
+          <span class="pill">潜能 {{ row.potentialRank }}/5</span>
+          <span class="pill">技能 Lv.{{ row.mainSkillLvl }}/7</span>
+          {% if row.module_total and row.evolvePhase >= 2 %}<span class="pill">模组 {{ row.module_unlocked }}/{{ row.module_total }}</span>{% endif %}
           <form method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}/delete" onsubmit="return confirm('确定移除该干员？编队中的槽位会清空。')">
             <button class="danger" type="submit">移除</button>
           </form>
         </div>
       </header>
+      <form class="operator-form operator-potential-form" method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}">
+        <input type="hidden" name="action" value="potential">
+        <label>潜能等级（0=未提升，5=满潜）
+          <select name="potentialRank">
+            {% for value in range(6) %}
+            <option value="{{ value }}" {% if row.potentialRank == value %}selected{% endif %}>{{ value }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="actions"><button class="primary" type="submit">保存潜能</button></div>
+      </form>
+      <form class="operator-form operator-skill-form" method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}">
+        <input type="hidden" name="action" value="skill">
+        <label>技能等级（1–7）
+          <select name="mainSkillLvl">
+            {% for value in range(1, 8) %}
+            <option value="{{ value }}" {% if row.mainSkillLvl == value %}selected{% endif %}>{{ value }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="actions"><button class="primary" type="submit">保存技能等级</button></div>
+      </form>
+      {% if row.module_total %}
+      <details class="module-editor" {% if open_module_inst and open_module_inst == row.instId %}open{% endif %}>
+        <summary>模组管理 · 已解锁 {{ row.module_unlocked }}/{{ row.module_total }}{% if row.evolvePhase < 2 %} · 精二后可见{% endif %}{% if row.module_equipped %} · 已装备 {{ row.module_equipped }}{% endif %}</summary>
+        <form class="module-form" method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}">
+          <input type="hidden" name="action" value="module">
+          <div class="module-toolbar">
+            <label>当前装备
+              <select name="currentEquip">
+                {% for module in row.modules %}
+                <option value="{{ module.id }}" {% if module.equipped %}selected{% endif %}>{{ module.name }} · {{ module.type_name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <span class="muted small-note">未勾选“已解锁”的模组会恢复锁定；选择装备的模组会自动解锁。模组可见性仍由精英阶段决定。</span>
+          </div>
+          <div class="table-wrap">
+          <table class="table compact-table module-table">
+            <thead><tr><th>模组</th><th>类型</th><th>解锁条件</th><th>已解锁</th><th>等级</th></tr></thead>
+            <tbody>
+            {% for module in row.modules %}
+            <tr>
+              <td><strong>{{ module.name }}</strong><div class="mono muted">{{ module.id }}</div></td>
+              <td>{{ module.type_name }}<div class="muted mono">{{ module.type }}</div></td>
+              <td class="module-cond">{{ module.condition }}</td>
+              <td><label class="module-check"><input type="checkbox" name="unlocked_{{ module.id }}" value="1" {% if not module.locked %}checked{% endif %}> 已解锁</label></td>
+              <td>
+                <select name="level_{{ module.id }}">
+                  {% for level in range(1, module.max_level + 1) %}
+                  <option value="{{ level }}" {% if module.level == level %}selected{% endif %}>Lv.{{ level }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          </div>
+          <div class="actions">
+            <button class="primary" type="submit" name="mode" value="save">保存模组</button>
+            <button type="submit" name="mode" value="unlock_all">全部解锁</button>
+            <button type="submit" name="mode" value="max_all">全部解锁并满级</button>
+          </div>
+        </form>
+      </details>
+      {% else %}
+      <p class="muted small-note module-empty">模组：该干员没有模组配置。</p>
+      {% endif %}
       <form class="operator-form" method="post" action="/admin/accounts/{{ account.uid }}/operator/{{ row.instId }}">
         {{ number_field('level', '等级', row.level, 1) }}
         {{ number_field('evolvePhase', '精英阶段', row.evolvePhase) }}
-        {{ number_field('potentialRank', '潜能', row.potentialRank) }}
-        {{ number_field('mainSkillLvl', '技能等级', row.mainSkillLvl, 1) }}
         {{ number_field('favorPoint', '信赖', row.favorPoint) }}
         <label>皮肤<input name="skin" value="{{ row.skin }}" list="skin-catalog"></label>
         <label>语音
@@ -300,6 +371,25 @@
     <p class="muted">暂无干员。</p>
   {% endfor %}
   </div>
+</section>
+
+<section class="panel" id="battle-generator">
+  <div class="panel-head"><h2>一键生成对局</h2><span class="muted">调用真实 battleFinish 结算</span></div>
+  <form class="inline-form battle-generator-form" method="post" action="/admin/accounts/{{ account.uid }}/battle/generate">
+    <label>关卡 ID<input name="stage_id" value="{{ status.get('mainStageProgress', '') }}" placeholder="main_00-11 / 0-11" required></label>
+    <label>评价
+      <select name="complete_state">
+        <option value="3">三星</option>
+        <option value="2">二星</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="with_replay" value="1" checked> 生成代理指挥回放</label>
+    <button class="primary" type="submit">生成对局</button>
+  </form>
+  <p class="muted small-note">会按真实战斗结算写入 battle_records、关卡状态、奖励、任务和主线进度，并同时写入可解码的代理指挥回放。0-11 使用真实关卡地格上的部署序列；其他关卡使用当前编队生成通用回放。</p>
+  {% set zero_eleven = (user.get('dungeon', {}).get('stages', {}) or {}).get('main_00-11', {}) %}
+  <p class="muted small-note">0-11 回放状态：{{ '已写入代理指挥回放' if zero_eleven.get('hasBattleReplay') else '尚未写入' }}（{{ (zero_eleven.get('battleReplay') or '')|length }} 字符）</p>
+  <a class="btn" href="/admin/battles?uid={{ account.uid }}">查看该账号对局记录</a>
 </section>
 
 <section class="panel" id="squads">

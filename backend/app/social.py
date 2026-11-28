@@ -206,6 +206,174 @@ def _shared_char(char, slot):
         "crisisV2Record": {},
         "currentEquip": slot.get("currentEquip") or None,
         "equip": char.get("equip") if isinstance(char.get("equip"), dict) else {},
+        "currentTmpl": str(slot.get("currentTmpl") or char.get("currentTmpl") or ""),
+        "tmpl": slot.get("tmpl") if isinstance(slot.get("tmpl"), list) else [],
+    }
+
+
+def _assist_entry(target, uid, friend):
+    """Build one SquadAssistData entry for a support player."""
+    status = target.get("status") or {}
+    social = target.get("social") or {}
+    chars = (target.get("troop") or {}).get("chars") or {}
+    stored = social.get("assistCharList")
+    if not isinstance(stored, list):
+        stored = []
+    assist_chars = []
+    for slot in stored:
+        if not isinstance(slot, dict):
+            continue
+        char = chars.get(str(slot.get("charInstId") or ""))
+        if isinstance(char, dict):
+            assist_chars.append(_shared_char(char, slot))
+    if not assist_chars:
+        return None
+    alias = (friend.get("alias") or {}).get(str(uid))
+    return {
+        "nickName": status.get("nickName") or "博士",
+        "uid": str(uid),
+        "serverName": status.get("serverName") or "",
+        "nickNumber": status.get("nickNumber") or "",
+        "level": _int(status.get("level"), 1),
+        "lastOnlineTime": _int(status.get("lastOnlineTs"), 0),
+        "recentVisited": False,
+        "avatar": status.get("avatar") if isinstance(status.get("avatar"), dict) else {},
+        "secretary": status.get("secretary"),
+        "secretarySkinId": status.get("secretarySkinId"),
+        "secretarySkinSp": bool(status.get("secretarySkinSp")),
+        "assistSlotIndex": 0,
+        "aliasName": alias,
+        "assistCharList": assist_chars,
+        "isFriend": is_friend(friend, uid),
+        "canRequestFriend": not is_friend(friend, uid),
+        "isStarFriend": any(parse_uid(item) == uid for item in friend.get("star") or []),
+    }
+
+
+def get_assist_list(account, user, body):
+    """Return support operators for /quest/getAssistList.
+
+    The client asks for one profession tab at a time.  Build the pool from all
+    other accounts that have an assist slot configured; friends are preferred
+    and star friends are split into their own list, matching the official
+    response shape.
+    """
+    friend = load_friend(user)
+    my_uid = _int(account.get("uid"), 0)
+    profession = str((body or {}).get("profession") or "ALL").upper()
+    if profession in ("NONE", ""):
+        profession = "ALL"
+    # The request field is a string; older clients send the flag value
+    # (1023 = ALL, 512 = PIONEER, 1 = WARRIOR, ...).
+    if profession.isdigit():
+        mask = int(profession)
+        if mask in (0, 1023):
+            profession = "ALL"
+        else:
+            for bit, name in ((1, "WARRIOR"), (2, "SNIPER"), (4, "TANK"), (8, "MEDIC"),
+                              (16, "SUPPORT"), (32, "CASTER"), (64, "SPECIAL"), (512, "PIONEER")):
+                if mask & bit:
+                    profession = name
+                    break
+    with connect() as conn:
+        rows = conn.execute("SELECT uid, user_json FROM accounts ORDER BY uid").fetchall()
+    normal = []
+    stars = []
+    for row in rows:
+        uid = _int(row["uid"], 0)
+        if uid <= 0 or uid == my_uid:
+            continue
+        try:
+            target = json.loads(row["user_json"])
+        except (TypeError, ValueError):
+            continue
+        entry = _assist_entry(target, uid, friend)
+        if not entry:
+            continue
+        if profession != "ALL":
+            entry["assistCharList"] = [
+                item for item in entry["assistCharList"]
+                if str((game_data.character(item.get("charId")) or {}).get("profession") or "").upper() == profession
+            ]
+            if not entry["assistCharList"]:
+                continue
+        normal.append(entry)
+        if entry["isStarFriend"]:
+            stars.append(entry)
+    # A one-account local server often has no friend for a given profession.
+    # Fill the remaining tabs from the player's own roster so the support page
+    # never renders an empty list (the official server always has a public pool).
+    professions = [
+        "PIONEER", "WARRIOR", "TANK", "SNIPER",
+        "CASTER", "MEDIC", "SUPPORT", "SPECIAL",
+    ]
+    wanted = professions if profession == "ALL" else [profession]
+    present = set()
+    for entry in normal:
+        for item in entry.get("assistCharList") or []:
+            meta = game_data.character(item.get("charId")) or {}
+            present.add(str(meta.get("profession") or "").upper())
+    for index, prof in enumerate(wanted):
+        if prof in present:
+            continue
+        fallback = _fallback_assist(user, prof, index)
+        if fallback:
+            normal.append(fallback)
+    normal.sort(key=lambda item: (not item["isFriend"], item["uid"]))
+    stars.sort(key=lambda item: item["uid"])
+    return {
+        "result": 0,
+        "allowAskTs": 0,
+        "assistList": normal,
+        "starFriendAssistList": stars,
+        "playerDataDelta": _empty_delta(),
+    }
+
+
+def _fallback_assist(user, profession, slot_index):
+    chars = (user.get("troop") or {}).get("chars") or {}
+    best = None
+    best_score = None
+    for char in chars.values():
+        if not isinstance(char, dict):
+            continue
+        meta = game_data.character(char.get("charId")) or {}
+        if str(meta.get("profession") or "").upper() != profession:
+            continue
+        score = (
+            _int(char.get("evolvePhase"), 0),
+            _int(char.get("level"), 1),
+            _int(meta.get("rarity"), 0),
+        )
+        if best_score is None or score > best_score:
+            best = char
+            best_score = score
+    if not best:
+        return None
+    char_id = str(best.get("charId") or "")
+    meta = game_data.character(char_id) or {}
+    slot = {
+        "charInstId": _int(best.get("instId"), 0),
+        "skillIndex": _int(best.get("defaultSkillIndex"), 0),
+    }
+    return {
+        "nickName": "支援·" + str(meta.get("name") or char_id),
+        "uid": str(80000000 + _int(best.get("instId"), 0)),
+        "serverName": "泰拉",
+        "nickNumber": "0",
+        "level": 120,
+        "lastOnlineTime": now_ts(),
+        "recentVisited": False,
+        "avatar": {},
+        "secretary": char_id,
+        "secretarySkinId": str(best.get("skin") or (char_id + "#1")),
+        "secretarySkinSp": False,
+        "assistSlotIndex": slot_index % 3,
+        "aliasName": None,
+        "assistCharList": [_shared_char(best, slot)],
+        "isFriend": False,
+        "canRequestFriend": False,
+        "isStarFriend": False,
     }
 
 

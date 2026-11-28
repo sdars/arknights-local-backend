@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from ..config import APP_CODE, CLIENT_VERSION, RES_VERSION
+from ..config import APP_CODE
 from ..services import account_by_phone, account_by_token, create_account
 from .. import payments, product_catalog
 

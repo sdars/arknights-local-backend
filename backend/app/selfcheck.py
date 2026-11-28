@@ -224,7 +224,7 @@ def _adb_status(detailed=False):
             "-s",
             serial,
             "shell",
-            "grep -cE '127\\.0\\.0\\.1 (as|game-config|ak-conf|launcher|ak-webview)\\.hypergryph\\.com|127\\.0\\.0\\.1 openapi\\.alipay\\.com' /system/etc/hosts",
+            "grep -cE '^127\\.0\\.0\\.1[[:space:]]+(as|game-config|ak-conf|launcher|ak-webview)\\.hypergryph\\.com([[:space:]]|$)|^127\\.0\\.0\\.1[[:space:]]+openapi\\.alipay\\.com([[:space:]]|$)' /system/etc/hosts",
         ],
         timeout=5,
     )

@@ -24,6 +24,7 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - **设备侧**：hosts 把 Hypergryph SDK 域名指向本机，443 由 `nc` 转发到 8444；系统 HTTP 代理保持关闭。
 - **资源**：`network_config.hu` 可在官方 CDN 与本机 `/assetbundle/official` 间切换；本地根目录命中时直接下发，缺失时 302 到独立回源地址，避免自跳转。
 - **Web 管理后台**：同端口 `/admin`，账号 `sdars`，密码 `123456`（可用环境变量覆盖）。
+- **面具模块**：`deploy/magisk/ark-local` 可打包为 Magisk/KernelSU/APatch 模块，systemless hosts + 系统 CA + 设备侧 443 relay，官方 APK 不改包即可接入本机后端。
 
 ## 已实现能力
 
@@ -35,7 +36,8 @@ Android 客户端（com.hypergryph.arknights 2.7.91）
 - 寻访：`/gacha/getPoolDetail`、`/gacha/advancedGacha`、`/gacha/tenAdvancedGacha`、公开招募同步；支持卡池概率、UP、价格、保底、开放时间、新卡池与干员入库
 - 干员：`/charBuild/upgradeChar`、`evolveChar`、`upgradeSkill`、潜能、技能、装备、皮肤与语音；在线 `syncStatus` / `syncPushMessage` 会回传后台修改后的完整状态
 - 支付：`/pay/createOrder`、`/pay/confirmOrder`、`/pay/order/v1/state`、`/pay/order/v2/check/{payment}`、`/u8/pay/confirmOrderState`、`/user/pay/order/v2/create/app_product`、`/pay/createOrderAlipay`、`/pay/confirmOrderAlipay`、`/pay/createOrderWechat`；支付宝 page pay 由 mitm 重定向到本地 `/pay/success`，不依赖真实商户号；源石商品按 `CashGoodList.json` 的 `doubleCount` / `diamondNum + plusNum` 发放，旧 `CS_*_r3~r6` 商品 ID 映射到当前档位；月卡激活 30 天订阅并发放当日每日奖励；所有订单用 `granted_items_json` 防止重复
-- 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
+- 配置与资源：动态 `network_config` / `remote_config`、客户端与资源版本、后台自动同步官方版本（ETag/304、失败不覆盖）、客户端强制更新、维护模式、APK 更新地址、`/assetbundle/official/...` 本地文件与回源、Web ZIP/单文件上传
+- 官方客户端接入：Magisk/APatch `ark-local` 模块（systemless hosts、mitmproxy CA、443→8444 relay、app UID `ARK_LOCAL` nat 链）；`scripts/build_ark_module.sh` / `install_ark_module.sh` / `ark_module_status.sh`
 - 邮件：模板中心、单账号/多 UID/全服发送、有效期与附件、邮件箱、单封/批量领取、防重复发奖、已读删除；`pushFlags.hasGifts` 与邮箱同步
 - Web UI：仪表盘、账号列表搜索、用户控制台（资料、货币、体力、主线进度、库存、皮肤、头像、干员、编队、订单、邮件、Token、JSON 导出）、商品管理（新增/改价/上下架/发放内容）、寻访管理（概率/UP/价格/保底/新卡池）、订单管理、代金券、邮件中心、请求日志、服务与更新设置
 

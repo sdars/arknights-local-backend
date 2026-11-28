@@ -1,0 +1,8 @@
+127.0.0.1       localhost
+::1             ip6-localhost
+127.0.0.1       openapi.alipay.com
+127.0.0.1       as.hypergryph.com
+127.0.0.1       game-config.hypergryph.com
+127.0.0.1       ak-conf.hypergryph.com
+127.0.0.1       launcher.hypergryph.com
+127.0.0.1       ak-webview.hypergryph.com

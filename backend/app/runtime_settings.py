@@ -1,4 +1,11 @@
-from .config import ASSET_CDN, CLIENT_VERSION, RES_VERSION, SERVER_NAME
+from .config import (
+    ASSET_CDN,
+    CLIENT_VERSION,
+    OFFICIAL_SYNC_INTERVAL,
+    OFFICIAL_VERSION_URL,
+    RES_VERSION,
+    SERVER_NAME,
+)
 from .db import get_setting, set_setting
 
 
@@ -6,6 +13,13 @@ def _bool(value, default=False):
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int(value, default=0):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
 
 
 def values():
@@ -24,6 +38,28 @@ def values():
         "asset_root": get_setting("asset_root", ""),
         "update_url": get_setting("update_url", ""),
         "update_notes": get_setting("update_notes", ""),
+        "official_sync_enabled": _bool(get_setting("official_sync_enabled"), True),
+        "official_sync_url": get_setting("official_sync_url", OFFICIAL_VERSION_URL),
+        "official_sync_interval": _int(
+            get_setting("official_sync_interval"), OFFICIAL_SYNC_INTERVAL
+        ),
+        "official_sync_client": _bool(get_setting("official_sync_client"), True),
+        "official_sync_res": _bool(get_setting("official_sync_res"), True),
+        "official_sync_last_attempt": get_setting("official_sync_last_attempt", ""),
+        "official_sync_last_success": get_setting("official_sync_last_success", ""),
+        "official_sync_last_status": get_setting("official_sync_last_status", "never"),
+        "official_sync_last_error": get_setting("official_sync_last_error", ""),
+        "official_sync_last_client_version": get_setting(
+            "official_sync_last_client_version", ""
+        ),
+        "official_sync_last_res_version": get_setting(
+            "official_sync_last_res_version", ""
+        ),
+        "official_sync_last_duration_ms": _int(
+            get_setting("official_sync_last_duration_ms"), 0
+        ),
+        "official_sync_etag": get_setting("official_sync_etag", ""),
+        "official_sync_etag_url": get_setting("official_sync_etag_url", ""),
     }
 
 
@@ -43,6 +79,20 @@ def save(values_map):
         "asset_root",
         "update_url",
         "update_notes",
+        "official_sync_enabled",
+        "official_sync_url",
+        "official_sync_interval",
+        "official_sync_client",
+        "official_sync_res",
+        "official_sync_last_attempt",
+        "official_sync_last_success",
+        "official_sync_last_status",
+        "official_sync_last_error",
+        "official_sync_last_client_version",
+        "official_sync_last_res_version",
+        "official_sync_last_duration_ms",
+        "official_sync_etag",
+        "official_sync_etag_url",
     ):
         if key in values_map:
             value = values_map[key]

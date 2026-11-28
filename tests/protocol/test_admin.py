@@ -56,6 +56,14 @@ def test_adb_diagnostics_cover_app_tls_path(client):
     assert body["app_tls_ok"] is True, body["app_tls_detail"]
 
 
+def test_metrics_endpoint(client):
+    response = client.get(f"{client.base_url}/metrics", timeout=10)
+    assert response.status_code == 200
+    assert "ark_backend_up 1" in response.text
+    assert "ark_backend_client_version_info{version=" in response.text
+    assert "ark_backend_res_version_info{version=" in response.text
+
+
 def test_protocol_index_and_api(client):
     assert admin_login(client).status_code == 303
     page = client.get(f"{client.base_url}/admin/protocol?q=syncData&kind=core", timeout=15)

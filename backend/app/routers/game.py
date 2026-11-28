@@ -8,12 +8,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..config import BATTLE_START_TEMPLATE
-from ..db import now_ts
+from ..db import connect, now_ts
 from ..services import account_by_token, player_data, save_player, touch_login
 from ..shop_fixtures import shop_response, skin_good_list as load_skin_goods
 from .. import (
     battles,
     checkin as checkin_service,
+    equipment as equipment_state,
     gacha_service,
     game_data,
     grants,
@@ -138,6 +139,7 @@ async def sync_data(request: Request):
     skin.setdefault("skinTs", {})
     skin.setdefault("skinSp", {})
     _repair_char_skins(user)
+    equipment_state.ensure_user_equipment(user)
     save_player(account, user)
     return {"result": 0, "ts": ts, "user": user, **empty_delta()}
 
@@ -185,6 +187,7 @@ async def sync_status(request: Request):
     skin_state.setdefault("skinTs", {})
     skin_state.setdefault("skinSp", {})
     _repair_char_skins(user)
+    equipment_state.ensure_user_equipment(user)
     save_player(account, user)
     modified = {
         key: user.get(key)
@@ -315,6 +318,18 @@ async def get_battle_replay(request: Request):
     body = await request.json()
     user = player_data(account)
     return battles.load_battle_replay(user, body.get("stageId"))
+
+
+@router.post("/quest/getAssistList")
+async def get_assist_list(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return social_service.get_assist_list(account, player_data(account), body)
 
 
 @router.post("/mission/confirmMission")
@@ -1074,8 +1089,16 @@ async def change_squad_name(request: Request):
 
 
 @router.post("/pay/getUnconfirmedOrderIdList")
-async def unconfirmed_orders():
-    return {"result": 0, "orderIdList": []}
+async def unconfirmed_orders(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT order_id FROM orders WHERE account_id=? AND status=0 ORDER BY created_at DESC",
+            (account["id"],),
+        ).fetchall()
+    return {"result": 0, "orderIdList": [row["order_id"] for row in rows]}
 
 
 @router.post("/pay/createOrder")
@@ -1215,8 +1238,33 @@ async def order_state(orderId: str = ""):
 
 
 @router.post("/story/finishStory")
-async def finish_story():
-    return {"result": 0, **empty_delta()}
+async def finish_story(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    story_id = str(body.get("storyId") or "")
+    if not story_id:
+        return {"result": 1, "error": "storyId required", **empty_delta()}
+    user = player_data(account)
+    status = user.setdefault("status", {})
+    flags = status.setdefault("flags", {})
+    flags[story_id] = 1
+    stories = game_data.excel("story_table.json") or {}
+    story = stories.get(story_id) if isinstance(stories, dict) else None
+    if isinstance(story, dict) and _as_int(story.get("setProgress"), -1) >= 0:
+        status["progress"] = _as_int(story.get("setProgress"), status.get("progress", 0))
+    battles.reconcile_tutorial_state(user)
+    save_player(account, user)
+    modified = {"status": status, "mission": user.get("mission", {})}
+    return {
+        "result": 0,
+        "items": [],
+        "playerDataDelta": {"deleted": {}, "modified": modified},
+    }
 
 
 @router.post("/shop/getCashGoodList")
@@ -1645,6 +1693,7 @@ async def char_build_evolve_char(request: Request):
     char["evolvePhase"] = dest
     char["level"] = min(_as_int(char.get("level"), 1), _phase_max_level(meta, dest))
     _sync_skill_unlocks(char, meta)
+    equipment_state.ensure_char_equipment(char)
     guide_changed = _guide_changed(user, guide_before)
     save_player(account, user)
     response = _char_response(
@@ -1974,19 +2023,31 @@ def _char_rotation_state(user):
         rotation["preset"] = presets
     if not presets:
         preset_id = "1"
+        char_id, skin_id = _first_troop_skin(user)
         presets[preset_id] = {
             "name": "未命名界面配置",
             "background": "bg_rhodes_day",
             "homeTheme": "tm_rhodes_day",
-            "profile": "",
+            "profile": skin_id,
             "profileSp": False,
-            "slots": [],
+            "slots": [{"charId": char_id, "skinId": skin_id, "skinSp": False}] if char_id else [],
         }
         rotation["current"] = preset_id
     current = str(rotation.get("current") or "")
     if current not in presets:
         rotation["current"] = str(next(iter(presets)))
     return rotation, presets
+
+
+def _first_troop_skin(user):
+    for char in ((user.get("troop") or {}).get("chars") or {}).values():
+        if not isinstance(char, dict):
+            continue
+        char_id = str(char.get("charId") or "")
+        if not char_id:
+            continue
+        return char_id, str(char.get("skin") or f"{char_id}#1")
+    return "", "char_002_amiya#1"
 
 
 def _next_rotation_preset_id(presets):
@@ -2034,14 +2095,27 @@ async def char_rotation_create_preset(request: Request):
     user = player_data(account)
     rotation, presets = _char_rotation_state(user)
     inst_id = _next_rotation_preset_id(presets)
+    current = presets.get(str(rotation.get("current") or ""))
+    source = current if isinstance(current, dict) else {}
+    char_id, fallback_skin = _first_troop_skin(user)
+    profile = str(source.get("profile") or "")
+    if not profile:
+        slots = [slot for slot in (source.get("slots") or []) if isinstance(slot, dict) and slot.get("skinId")]
+        profile = str(slots[0]["skinId"]) if slots else fallback_skin
+    slots = [dict(slot) for slot in (source.get("slots") or []) if isinstance(slot, dict) and slot.get("charId")]
+    if not slots:
+        profile_char = str((_skin_meta(profile) or {}).get("charId") or char_id)
+        slots = [{"charId": profile_char, "skinId": profile, "skinSp": False}]
     presets[inst_id] = {
         "name": "未命名界面配置",
-        "background": "bg_rhodes_day",
-        "homeTheme": "tm_rhodes_day",
-        "profile": "",
-        "profileSp": False,
-        "slots": [],
+        "background": str(source.get("background") or "bg_rhodes_day"),
+        "homeTheme": str(source.get("homeTheme") or "tm_rhodes_day"),
+        "profile": profile,
+        "profileSp": bool(source.get("profileSp")),
+        "slots": slots,
     }
+    if source.get("profileInst"):
+        presets[inst_id]["profileInst"] = str(source.get("profileInst"))
     save_player(account, user)
     return {"result": 0, "instId": inst_id, "playerDataDelta": {"deleted": {}, "modified": {"charRotation": rotation}}}
 
@@ -2146,18 +2220,270 @@ async def char_build_specialize(request: Request):
 
 
 @router.post("/charBuild/addonStory/unlock")
-async def char_build_addon_story():
-    return {"result": 0, **empty_delta()}
+async def char_build_addon_story(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    char_id = str(body.get("charId") or "")
+    story_id = str(body.get("storyId") or "")
+    if not char_id or not story_id:
+        return {"result": 1, "error": "charId and storyId required", **empty_delta()}
+    user = player_data(account)
+    troop = user.setdefault("troop", {})
+    chars = troop.setdefault("chars", {})
+    if not any(isinstance(char, dict) and char.get("charId") == char_id for char in chars.values()):
+        return {"result": 1, "error": "operator not owned", **empty_delta()}
+    addon = troop.setdefault("addon", {})
+    node = addon.setdefault(char_id, {})
+    stories = node.setdefault("story", {})
+    stamp = now_ts()
+    stories[story_id] = {"fts": stamp, "rts": stamp}
+    save_player(account, user)
+    return {
+        "result": 0,
+        "playerDataDelta": {"deleted": {}, "modified": {"troop": {"addon": addon}}},
+    }
+
+
+def _body_inst_ids(body):
+    """Accept the singular and list request shapes used by client builds."""
+    values = []
+    for key in ("charInstIdList", "charInstIds", "instIds", "charInstId", "instId"):
+        raw = body.get(key)
+        if raw is None or raw == "":
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            values.extend(str(value) for value in raw if value is not None and value != "")
+        else:
+            values.append(str(raw))
+    seen = set()
+    return [value for value in values if not (value in seen or seen.add(value))]
+
+
+def _locked_from_body(body):
+    for key in ("locked", "isLocked", "lock", "value", "state"):
+        if key in body:
+            return bool(_as_int(body.get(key), 1))
+    return True
+
+
+def _remove_char_instance(user, inst_id):
+    """Remove one roster instance and all references to that instance."""
+    inst_id = str(inst_id)
+    troop = user.setdefault("troop", {})
+    chars = troop.get("chars")
+    if not isinstance(chars, dict):
+        return None, None
+    char = chars.pop(inst_id, None)
+    if not isinstance(char, dict):
+        return None, None
+    char_id = str(char.get("charId") or "")
+
+    building = user.get("building")
+    if isinstance(building, dict):
+        building_chars = building.get("chars")
+        if isinstance(building_chars, dict):
+            building_chars.pop(inst_id, None)
+        for slot in (building.get("roomSlots") or {}).values():
+            if isinstance(slot, dict) and isinstance(slot.get("charInstIds"), list):
+                slot["charInstIds"] = [
+                    item for item in slot["charInstIds"] if str(item) != inst_id
+                ]
+        if isinstance(building.get("assist"), list):
+            building["assist"] = [
+                item for item in building["assist"]
+                if not (isinstance(item, dict) and str(item.get("charInstId")) == inst_id)
+            ]
+
+    squads = troop.get("squads")
+    if isinstance(squads, dict):
+        for squad in squads.values():
+            if not isinstance(squad, dict) or not isinstance(squad.get("slots"), list):
+                continue
+            for index, slot in enumerate(squad["slots"]):
+                if isinstance(slot, dict) and str(slot.get("charInstId")) == inst_id:
+                    squad["slots"][index] = None
+
+    social = user.get("social")
+    if isinstance(social, dict) and isinstance(social.get("assistCharList"), list):
+        social["assistCharList"] = [
+            item for item in social["assistCharList"]
+            if not (isinstance(item, dict) and str(item.get("charInstId")) == inst_id)
+        ]
+
+    remaining_same_id = any(
+        isinstance(value, dict) and str(value.get("charId") or "") == char_id
+        for value in chars.values()
+    )
+    replacement_inst = next(
+        (str(key) for key, value in chars.items()
+         if isinstance(value, dict) and str(value.get("charId") or "") == char_id),
+        "",
+    )
+    rotation = user.get("charRotation")
+    if isinstance(rotation, dict):
+        for preset in (rotation.get("preset") or {}).values():
+            if not isinstance(preset, dict):
+                continue
+            if str(preset.get("profileInst") or "") == inst_id:
+                if replacement_inst:
+                    preset["profileInst"] = replacement_inst
+                else:
+                    preset.pop("profileInst", None)
+    if not remaining_same_id and char_id:
+        for key in ("charGroup", "charMission", "spOperator"):
+            node = troop.get(key)
+            if isinstance(node, dict):
+                node.pop(char_id, None)
+
+        if isinstance(rotation, dict):
+            for preset in (rotation.get("preset") or {}).values():
+                if not isinstance(preset, dict):
+                    continue
+                if isinstance(preset.get("slots"), list):
+                    preset["slots"] = [
+                        slot for slot in preset["slots"]
+                        if not (isinstance(slot, dict) and str(slot.get("charId") or "") == char_id)
+                    ]
+                if not replacement_inst:
+                    preset.pop("profileInst", None)
+                    slots = preset.get("slots") if isinstance(preset.get("slots"), list) else []
+                    fallback = next(
+                        (slot for slot in slots if isinstance(slot, dict) and slot.get("skinId")),
+                        None,
+                    )
+                    if fallback:
+                        preset["profile"] = fallback["skinId"]
+
+    current = str(troop.get("curCharInstId") or "")
+    if current == inst_id:
+        next_inst = next(
+            (str(key) for key, value in chars.items() if isinstance(value, dict)),
+            "0",
+        )
+        troop["curCharInstId"] = _as_int(next_inst, 0)
+    if "curCharInstCount" in troop:
+        troop["curCharInstCount"] = len(chars)
+    return char, remaining_same_id
+
+
+def _sell_refund(char):
+    meta = game_data.character(str(char.get("charId") or "")) or {}
+    rarity = max(1, _as_int(str(meta.get("rarity") or "TIER_1").replace("TIER_", ""), 1))
+    items = [{"id": "4001", "type": "GOLD", "count": rarity * 1000}]
+    if rarity >= 3:
+        items.append({"id": "4005", "type": "LGG_SHD", "count": max(1, rarity - 2)})
+    return items
 
 
 @router.post("/charBuild/lockChar")
-async def char_build_lock_char():
-    return {"result": 0, **empty_delta()}
+async def char_build_lock_char(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    inst_ids = _body_inst_ids(body)
+    if not inst_ids:
+        return {"result": 1, "error": "charInstId required", **empty_delta()}
+    locked = 1 if _locked_from_body(body) else 0
+    user = player_data(account)
+    chars = ((user.get("troop") or {}).get("chars") or {})
+    changed = {}
+    for inst_id in inst_ids:
+        char = chars.get(inst_id)
+        if not isinstance(char, dict):
+            continue
+        char["locked"] = locked
+        changed[inst_id] = {"locked": locked}
+    if not changed:
+        return {"result": 1, "error": "char not found", **empty_delta()}
+    save_player(account, user)
+    logger.info("charBuild lockChar uid=%s ids=%s locked=%s", account.get("uid"), inst_ids, locked)
+    return {
+        "result": 0,
+        "playerDataDelta": {"deleted": {}, "modified": {"troop": {"chars": changed}}},
+    }
 
 
 @router.post("/charBuild/sellChar")
-async def char_build_sell_char():
-    return {"result": 0, **empty_delta()}
+async def char_build_sell_char(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    inst_ids = _body_inst_ids(body)
+    if not inst_ids:
+        return {"result": 1, "error": "charInstIdList required", **empty_delta()}
+    user = player_data(account)
+    chars = ((user.get("troop") or {}).get("chars") or {})
+    targets = []
+    for inst_id in inst_ids:
+        char = chars.get(inst_id)
+        if not isinstance(char, dict):
+            return {"result": 1, "error": f"char not found: {inst_id}", **empty_delta()}
+        if _as_int(char.get("locked"), 0):
+            return {"result": 1, "error": f"char is locked: {inst_id}", **empty_delta()}
+        targets.append(inst_id)
+
+    removed_ids = []
+    removed_char_ids = set()
+    refunds = []
+    for inst_id in targets:
+        char, _remaining = _remove_char_instance(user, inst_id)
+        if not isinstance(char, dict):
+            continue
+        removed_ids.append(inst_id)
+        removed_char_ids.add(str(char.get("charId") or ""))
+        refunds.extend(_sell_refund(char))
+
+    if not removed_ids:
+        return {"result": 1, "error": "char not found", **empty_delta()}
+    refunds, refund_delta = grants.apply_items(user, refunds, source="char-sell")
+    save_player(account, user)
+    troop = user.get("troop") or {}
+    deleted_ids = [int(inst_id) if inst_id.isdigit() else inst_id for inst_id in removed_ids]
+    deleted = {
+        "troop": {"chars": deleted_ids},
+        "building": {"chars": list(deleted_ids)},
+    }
+    modified = {
+        "troop": {
+            key: troop.get(key)
+            for key in ("squads", "charGroup", "curCharInstId", "curCharInstCount", "charMission", "spOperator")
+            if key in troop
+        },
+        "building": user.get("building"),
+        "social": user.get("social"),
+        "charRotation": user.get("charRotation"),
+    }
+    for char_id in removed_char_ids:
+        if char_id and char_id not in (troop.get("charGroup") or {}):
+            deleted.setdefault("troop", {}).setdefault("charGroup", []).append(char_id)
+    delta = {
+        "deleted": deleted,
+        "modified": {key: value for key, value in modified.items() if value},
+    }
+    grants.merge_delta(delta, refund_delta)
+    logger.info("charBuild sellChar uid=%s ids=%s refunds=%s", account.get("uid"), removed_ids, refunds)
+    return {
+        "result": 0,
+        "items": refunds,
+        "playerDataDelta": delta,
+    }
 
 
 @router.post("/building/sync")
@@ -2384,13 +2710,70 @@ async def gacha_boost_normal(request: Request):
 
 
 @router.post("/gacha/buyRecruitSlot")
-async def gacha_buy_slot():
-    return {"result": 0, **empty_delta()}
+async def gacha_buy_slot(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    recruit = gacha_service.public_recruit_state(user)
+    slots = recruit["normal"].setdefault("slots", {})
+    slot_id = str(body.get("slotId") if body.get("slotId") is not None else 0)
+    if slot_id not in slots:
+        return {"result": 1, "error": "invalid recruit slot", **empty_delta()}
+    status = user.setdefault("status", {})
+    key = grants.diamond_status_key(user)
+    if _as_int(status.get(key), 0) < 600:
+        return {"result": 1, "error": "not enough diamond", **empty_delta()}
+    status[key] = _as_int(status.get(key), 0) - 600
+    slots[slot_id]["unlocked"] = 1
+    save_player(account, user)
+    return {"result": 0, "playerDataDelta": {"deleted": {}, "modified": {"status": status, "recruit": recruit}}}
 
 
 @router.post("/gacha/getFreeChar")
-async def gacha_get_free_char():
-    return {"result": 0, **empty_delta()}
+async def gacha_get_free_char(request: Request):
+    account = auth(request)
+    if not account:
+        return {"result": 2, "error": "invalid token"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    user = player_data(account)
+    pool_id = str(body.get("poolId") or "")
+    detail = gacha_service.pool_detail(pool_id) if pool_id else {}
+    candidates = []
+    if isinstance(detail, dict):
+        for row in ((detail.get("detailInfo") or {}).get("availCharInfo") or {}).get("perAvailList") or []:
+            if isinstance(row, dict):
+                candidates.extend(str(char_id) for char_id in row.get("charIdList") or [] if char_id)
+    if not candidates:
+        candidates = list(game_data.character_catalog())
+    owned = {
+        str(char.get("charId"))
+        for char in (user.get("troop") or {}).get("chars", {}).values()
+        if isinstance(char, dict)
+    }
+    char_id = next((char_id for char_id in candidates if char_id not in owned), "")
+    if not char_id:
+        return {"result": 1, "error": "no free operator available", **empty_delta()}
+    items, delta = grants.apply_items(user, [{"id": char_id, "type": "CHAR", "count": 1}], source="gacha-free-char")
+    save_player(account, user)
+    inst_id = 0
+    for key, char in ((user.get("troop") or {}).get("chars") or {}).items():
+        if isinstance(char, dict) and char.get("charId") == char_id:
+            inst_id = _as_int(key, 0)
+            break
+    return {
+        "result": 0,
+        "items": items,
+        "charGet": {"charId": char_id, "charInstId": inst_id, "isNew": 1, "itemGet": []},
+        "playerDataDelta": delta,
+    }
 
 
 @router.post("/gacha/choosePoolUp")

@@ -13,18 +13,27 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..config import APP_DIR, ASSET_CDN, SERVER_NAME, CLIENT_VERSION, RES_VERSION
+from ..config import (
+    APP_DIR,
+    ASSET_CDN,
+    CLIENT_VERSION,
+    OFFICIAL_VERSION_URL,
+    RES_VERSION,
+    SERVER_NAME,
+)
 from ..db import connect, recent_logs
 from ..security import verify_password, new_token
 from ..services import account_stats, list_accounts, create_account
 from .. import (
     battles,
+    equipment as equipment_state,
     gacha_service,
     game_data,
     gift_catalog,
     grants,
     mail_service,
     missions,
+    official_sync,
     payments,
     product_catalog,
     runtime_settings,
@@ -934,6 +943,9 @@ def _account_page_context(account):
         phases = meta.get("phases") or []
         phase = min(max(0, _int(char.get("evolvePhase"), 0)), max(0, len(phases) - 1))
         max_level = max(1, _int((phases[phase] or {}).get("maxLevel"), 1)) if phases else 90
+        modules = equipment_state.list_modules(char)
+        module_unlocked = len([module for module in modules if not module["locked"]])
+        module_equipped = next((module["name"] for module in modules if module["equipped"]), "")
         character_rows.append(
             {
                 "instId": str(inst_id),
@@ -948,6 +960,10 @@ def _account_page_context(account):
                 "favorPoint": _int(char.get("favorPoint"), 0),
                 "skin": char.get("skin") or "",
                 "voiceLan": char.get("voiceLan") or "",
+                "modules": modules,
+                "module_total": len(modules),
+                "module_unlocked": module_unlocked,
+                "module_equipped": module_equipped,
             }
         )
     character_rows.sort(key=lambda row: (row["rarity"], row["name"], row["instId"]), reverse=True)
@@ -1350,6 +1366,7 @@ async def account_edit(request: Request, uid: int):
     context = _account_page_context(account)
     context["admin"] = admin_name(request)
     context["message"] = _take_flash(request)
+    context["open_module_inst"] = str(request.query_params.get("module") or "")
     return templates.TemplateResponse(request, "account_edit.html", context)
 
 
@@ -1688,6 +1705,75 @@ async def account_operator_update(request: Request, uid: int, inst_id: str):
     char = (user.get("troop", {}).get("chars") or {}).get(str(inst_id))
     if isinstance(char, dict):
         meta = game_data.character(char.get("charId")) or {}
+        if str(form.get("action") or "") == "module":
+            equipment_state.ensure_char_equipment(char)
+            modules = equipment_state.list_modules(char)
+            if not modules:
+                _flash(request, f"{meta.get('name') or char.get('charId') or inst_id} 没有模组配置")
+                return RedirectResponse(f"/admin/accounts/{uid}#operators", status_code=303)
+            equip = char.get("equip")
+            if not isinstance(equip, dict):
+                equip = {}
+                char["equip"] = equip
+            mode = str(form.get("mode") or "save")
+            if mode in {"unlock_all", "max_all"}:
+                for module in modules:
+                    slot = equip.setdefault(module["id"], {})
+                    slot["locked"] = 0
+                    if mode == "max_all":
+                        slot["level"] = module["max_level"]
+                if not char.get("currentEquip"):
+                    default = equipment_state.default_equip_id(char.get("charId"))
+                    if default:
+                        char["currentEquip"] = default
+                _save_user(uid, user)
+                verb = "解锁并满级" if mode == "max_all" else "解锁"
+                _flash(request, f"已将 {meta.get('name') or char.get('charId') or inst_id} 的 {len(modules)} 个模组全部{verb}")
+                return RedirectResponse(f"/admin/accounts/{uid}?module={inst_id}#operator-{inst_id}", status_code=303)
+            for module in modules:
+                slot = equip.setdefault(module["id"], {})
+                slot["locked"] = 0 if str(form.get(f"unlocked_{module['id']}") or "") == "1" else 1
+                slot["level"] = min(
+                    max(1, _int(form.get(f"level_{module['id']}"), _int(slot.get("level"), 1))),
+                    module["max_level"],
+                )
+            current = str(form.get("currentEquip") or "")
+            valid_ids = {module["id"] for module in modules}
+            if current in valid_ids:
+                equip.setdefault(current, {})["locked"] = 0
+                char["currentEquip"] = current
+            elif not char.get("currentEquip"):
+                char["currentEquip"] = equipment_state.default_equip_id(char.get("charId")) or None
+            _save_user(uid, user)
+            current_name = next(
+                (module["name"] for module in modules if module["id"] == char.get("currentEquip")),
+                "",
+            )
+            unlocked = len([module for module in modules if not _int((equip.get(module["id"]) or {}).get("locked"), 1)])
+            _flash(
+                request,
+                f"已保存 {meta.get('name') or char.get('charId') or inst_id} 的模组：解锁 {unlocked}/{len(modules)}，装备 {current_name or '无'}",
+            )
+            return RedirectResponse(f"/admin/accounts/{uid}?module={inst_id}#operator-{inst_id}", status_code=303)
+        if str(form.get("action") or "") == "potential":
+            char["potentialRank"] = min(max(0, _int(form.get("potentialRank"), 0)), 5)
+            equipment_state.ensure_char_equipment(char)
+            _save_user(uid, user)
+            _flash(
+                request,
+                f"已将 {meta.get('name') or char.get('charId') or inst_id} 的潜能设为 {char['potentialRank']}/5",
+            )
+            return RedirectResponse(f"/admin/accounts/{uid}#operators", status_code=303)
+        if str(form.get("action") or "") == "skill":
+            char["mainSkillLvl"] = min(max(1, _int(form.get("mainSkillLvl"), 1)), 7)
+            _sync_char_skills(char, meta)
+            equipment_state.ensure_char_equipment(char)
+            _save_user(uid, user)
+            _flash(
+                request,
+                f"已将 {meta.get('name') or char.get('charId') or inst_id} 的技能等级设为 {char['mainSkillLvl']}/7",
+            )
+            return RedirectResponse(f"/admin/accounts/{uid}#operators", status_code=303)
         if str(form.get("action") or "") == "levelup":
             level, exp, used = _levelup_operator(user, char, meta, form.get("target_level"))
             _save_user(uid, user)
@@ -1716,6 +1802,7 @@ async def account_operator_update(request: Request, uid: int, inst_id: str):
         if "voiceLan" in form:
             char["voiceLan"] = str(form.get("voiceLan") or "CN_MANDARIN")
         _sync_char_skills(char, meta)
+        equipment_state.ensure_char_equipment(char)
         _save_user(uid, user)
     return RedirectResponse(f"/admin/accounts/{uid}#operators", status_code=303)
 
@@ -1739,6 +1826,53 @@ async def account_operator_add(request: Request, uid: int):
         else:
             _flash(request, f"未知干员 ID：{char_id}")
     return RedirectResponse(f"/admin/accounts/{uid}#operators", status_code=303)
+
+
+@router.post("/accounts/{uid}/battle/generate")
+async def account_battle_generate(request: Request, uid: int):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    account = _account(uid)
+    if not account:
+        return RedirectResponse("/admin/accounts", status_code=303)
+    form = await request.form()
+    raw_stage = str(form.get("stage_id") or "").strip()
+    stage_id = raw_stage
+    if stage_id and not game_data.stage(stage_id):
+        stage_id = battles.normalize_main_stage(stage_id) or stage_id
+    if not stage_id:
+        stage_id = str((_user(account).get("status") or {}).get("mainStageProgress") or "")
+    if not game_data.stage(stage_id):
+        _flash(request, f"未知关卡：{raw_stage or stage_id or '(空)'}")
+        return RedirectResponse(f"/admin/accounts/{uid}#battle-generator", status_code=303)
+    complete_state = 3 if str(form.get("complete_state") or "3").strip() == "3" else 2
+    with_replay = form.get("with_replay") is not None
+    battle_id = f"admin-{uid}-{stage_id}-{int(time.time() * 1000)}"
+    replay = ""
+    if with_replay and complete_state >= 2:
+        replay = battles.build_battle_replay(_user(account), stage_id, complete_state)
+    body = {
+        "battleId": battle_id,
+        "stageId": stage_id,
+        "completeState": complete_state,
+        "result": 0,
+        "killCnt": 0,
+        "adminGenerated": True,
+    }
+    if replay:
+        body["battleReplay"] = replay
+    try:
+        result = await run_in_threadpool(battles.finish_battle, dict(account), body)
+    except Exception as exc:
+        _flash(request, f"生成对局失败：{exc}")
+        return RedirectResponse(f"/admin/accounts/{uid}#battle-generator", status_code=303)
+    if result.get("result") != 0:
+        _flash(request, f"生成对局失败：{result.get('error') or result}")
+    else:
+        suffix = "（含代理指挥回放）" if replay else "（未生成回放）"
+        _flash(request, f"已生成 {stage_id} 的{complete_state}星对局记录{suffix}")
+    return RedirectResponse(f"/admin/accounts/{uid}#battle-generator", status_code=303)
 
 
 @router.post("/accounts/{uid}/operator/{inst_id}/delete")
@@ -2576,6 +2710,7 @@ async def settings_page(request: Request):
             "announcement": settings["announcement"],
             "client_version": settings["client_version"],
             "res_version": settings["res_version"],
+            "sync_status": official_sync.status(),
             "asset_status": _asset_diagnostics(),
             "message": _take_flash(request),
         },
@@ -2607,6 +2742,55 @@ async def settings_save(request: Request):
         }
     )
     _flash(request, "服务设置已保存")
+    return RedirectResponse("/admin/settings", status_code=303)
+
+
+@router.get("/settings/official-sync/status")
+async def settings_official_sync_status(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    return JSONResponse(official_sync.status())
+
+
+@router.post("/settings/official-sync")
+async def settings_official_sync_save(request: Request):
+    redirect = need_login(request)
+    if redirect:
+        return redirect
+    form = await request.form()
+    op = str(form.get("op") or "save")
+    url = str(form.get("official_sync_url") or "").strip() or OFFICIAL_VERSION_URL
+    try:
+        official_sync.validate_url(url)
+        interval_minutes = int(str(form.get("official_sync_interval_minutes") or "60"))
+    except (ValueError, TypeError) as exc:
+        _flash(request, f"自动同步设置无效：{exc}")
+        return RedirectResponse("/admin/settings", status_code=303)
+    if interval_minutes < 1 or interval_minutes > 1440:
+        _flash(request, "检查间隔必须在 1 到 1440 分钟之间")
+        return RedirectResponse("/admin/settings", status_code=303)
+    runtime_settings.save(
+        {
+            "official_sync_enabled": 1 if form.get("official_sync_enabled") == "1" else 0,
+            "official_sync_url": url,
+            "official_sync_interval": interval_minutes * 60,
+            "official_sync_client": 1 if form.get("official_sync_client") == "1" else 0,
+            "official_sync_res": 1 if form.get("official_sync_res") == "1" else 0,
+        }
+    )
+    official_sync.wake()
+    if op == "sync":
+        result = await official_sync.sync_now()
+        status = str(result.get("status") or "")
+        if status == "error":
+            _flash(request, f"官方版本同步失败：{result.get('message') or '未知错误'}")
+        elif status == "busy":
+            _flash(request, "已有官方版本同步任务正在执行，请稍后再试")
+        else:
+            _flash(request, str(result.get("message") or "官方版本已同步"))
+    else:
+        _flash(request, "官方版本自动同步设置已保存")
     return RedirectResponse("/admin/settings", status_code=303)
 
 

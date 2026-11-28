@@ -2,7 +2,7 @@ import json
 import re
 import time
 
-from . import game_data
+from . import equipment as equipment_state, game_data
 
 
 STATUS_CURRENCIES = {
@@ -256,7 +256,7 @@ def _character_data(char_id, inst_id, now):
         "voiceLan": "CN_MANDARIN",
         "starMark": 0,
         "currentEquip": None,
-        "equip": {},
+        "equip": equipment_state.build_equip_slots(char_id),
     }
 
 

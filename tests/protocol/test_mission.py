@@ -335,7 +335,7 @@ def test_claiming_daily_tier_activates_next_tier_in_same_family():
     missions.reset_periodic_missions(user, now)
     daily = user["mission"]["missions"]["DAILY"]
     daily["daily_7001"]["progress"][0]["value"] = 1
-    result = missions.claim_missions(user, ["daily_7001"])
+    result = missions.claim_missions(user, ["daily_7001"], now=now)
     assert result["claimed"] == ["daily_7001"]
     assert daily["daily_7001"]["state"] == 3
     assert daily["daily_7002"]["state"] == 2
@@ -362,7 +362,7 @@ def test_daily_claim_all_advances_each_family_and_awards_points():
     daily["daily_7001"]["progress"][0]["value"] = 1
     daily["daily_7006"]["progress"][0]["value"] = 1
     before_point = user["mission"]["missionRewards"]["dailyPoint"]
-    result = missions.auto_confirm(user, "DAILY")
+    result = missions.auto_confirm(user, "DAILY", now=now)
     assert set(result["claimed"]) == {"daily_7001", "daily_7006"}
     assert daily["daily_7001"]["state"] == 3
     assert daily["daily_7006"]["state"] == 3

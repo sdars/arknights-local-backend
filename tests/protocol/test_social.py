@@ -80,6 +80,42 @@ def test_social_empty_list_responses_have_required_fields(client, login):
     assert send_list == {"friendsList": [], "requestSendIdList": []}
 
 
+def test_assist_list_returns_support_entries(client, login, test_account):
+    body = client.post(
+        f"{client.base_url}/quest/getAssistList",
+        headers=login["headers"],
+        json={"profession": "ALL", "askRefresh": False, "currSquadId": "0"},
+        timeout=15,
+    ).json()
+    assert body["result"] == 0
+    assert body["assistList"]
+    assert "starFriendAssistList" in body
+    for entry in body["assistList"]:
+        assert entry["uid"]
+        assert entry["assistCharList"]
+        for char in entry["assistCharList"]:
+            assert char["charId"]
+            assert "skills" in char
+            assert "level" in char
+
+    from app import game_data
+
+    profiles = {
+        str((game_data.character(char.get("charId")) or {}).get("profession") or "").upper()
+        for char in ((_user(test_account["uid"]).get("troop") or {}).get("chars") or {}).values()
+        if isinstance(char, dict)
+    }
+    for profession in sorted(prof for prof in profiles if prof):
+        filtered = client.post(
+            f"{client.base_url}/quest/getAssistList",
+            headers=login["headers"],
+            json={"profession": profession, "askRefresh": False, "currSquadId": "0"},
+            timeout=15,
+        ).json()
+        assert filtered["result"] == 0
+        assert filtered["assistList"], profession
+
+
 def test_full_friend_flow(client, login, test_account):
     phone = "188" + f"{random.SystemRandom().randrange(10**8):08d}"
     target, _created = create_account(phone, nickname="好友测试")

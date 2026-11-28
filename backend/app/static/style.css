@@ -86,6 +86,7 @@ button.primary:hover { background: var(--gold-2); color: #111; }
 button.danger { border-color: #5a2a2e; color: #f0b4b4; background: #1d1113; }
 button.link { border: 0; background: none; padding: 0; color: var(--muted); }
 .inline-form { display: grid; grid-template-columns: 1.2fr 1fr 28px 1.6fr auto; gap: 12px; align-items: end; }
+.battle-generator-form { grid-template-columns: minmax(220px, 1.6fr) 140px minmax(180px, 0.9fr) auto; }
 .form { display: grid; gap: 14px; max-width: 640px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .danger-zone { border-color: #3a2225; }
@@ -157,6 +158,19 @@ button.link { border: 0; background: none; padding: 0; color: var(--muted); }
 .operator-list, .squad-list { display: grid; gap: 12px; }
 .operator-card > header { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 12px; }
 .operator-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; align-items: end; }
+.operator-potential-form, .operator-skill-form { grid-template-columns: minmax(120px, 220px) auto; justify-content: start; margin-bottom: 12px; }
+.module-editor { margin: 12px 0; border-top: 1px solid var(--line); padding-top: 10px; }
+.module-editor summary { cursor: pointer; color: var(--gold-2); font-size: 13px; }
+.module-editor[open] summary { margin-bottom: 10px; }
+.module-form { display: grid; gap: 10px; }
+.module-toolbar { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.module-toolbar label { min-width: 260px; max-width: 420px; }
+.module-table th, .module-table td { padding: 7px 8px; }
+.module-table select { width: 90px; }
+.module-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; white-space: nowrap; }
+.module-check input { width: auto; }
+.module-cond { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.module-empty { margin: 10px 0 12px; }
 .slot-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 12px 0; }
 .row-form { display: flex; gap: 6px; align-items: center; min-width: 250px; }
 .row-form input[type="number"] { width: 86px; padding: 7px 8px; }

@@ -1,12 +1,21 @@
 import base64
+import gzip
 import io
 import json
 import os
 import sqlite3
 import time
 import zipfile
+import zlib
+import sys
+from pathlib import Path
 
 from conftest import DB_PATH
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "backend"))
+
+from app import battles  # noqa: E402
 
 
 def test_battle_start(client, login):
@@ -134,17 +143,20 @@ def test_admin_battle_records_show_uploaded_payload(client, test_account):
     assert "_battleStart" in page.text
 
 
-def test_unknown_route_returns_empty_delta(client, login):
+def test_unknown_route_returns_not_found(client, login):
     body = client.post(
         f"{client.base_url}/protocol/test/route-not-in-capture", headers=login["headers"], json={}, timeout=10
-    ).json()
-    assert body["result"] == 0
-    assert body["playerDataDelta"] == {"deleted": {}, "modified": {}}
+    )
+    assert body.status_code == 404
+    payload = body.json()
+    assert payload["result"] == 1
+    assert payload["path"] == "/protocol/test/route-not-in-capture"
 
 
 def test_battle_replay_round_trip(client, login):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("metadata.json", json.dumps({"kind": "metadata"}))
         archive.writestr(
             "journal.json",
             json.dumps({"journal": {"metadata": {"stageId": "main_00-01"}}}),
@@ -166,3 +178,87 @@ def test_battle_replay_round_trip(client, login):
     ).json()
     assert loaded["result"] == 0, loaded
     assert loaded["battleReplay"] == replay
+    synced = client.post(
+        f"{client.base_url}/account/syncData", headers=login["headers"], json={}, timeout=20
+    ).json()
+    node = synced["user"]["dungeon"]["stages"]["main_00-01"]
+    assert node["hasBattleReplay"] == 1
+    assert node["battleReplay"] == replay
+
+
+def test_battle_replay_accepts_compressed_json(client, login):
+    cases = [
+        ("gzip", gzip.compress(json.dumps({"journal": {"metadata": {"stageId": "main_00-01"}}}).encode("utf-8"))),
+        ("zlib", zlib.compress(json.dumps({"journal": {"metadata": {"stageId": "main_00-02"}}}).encode("utf-8"))),
+    ]
+    for label, raw in cases:
+        replay = base64.b64encode(raw).decode("ascii")
+        saved = client.post(
+            f"{client.base_url}/quest/saveBattleReplay",
+            headers=login["headers"],
+            json={"battleReplay": replay},
+            timeout=15,
+        ).json()
+        assert saved["result"] == 0, (label, saved)
+        synced = client.post(
+            f"{client.base_url}/account/syncData", headers=login["headers"], json={}, timeout=20
+        ).json()
+        node = synced["user"]["dungeon"]["stages"][saved["stageId"]]
+        assert node["hasBattleReplay"] == 1, (label, node)
+
+
+def test_build_0_11_replay_uses_real_tiles_and_level_caps():
+    chars = {}
+    for index, (char_id, inst_id) in enumerate(
+        [
+            ("char_264_f12yin", 264),
+            ("char_4207_branch", 4207),
+            ("char_180_amgoat", 180),
+            ("char_4080_lin", 4080),
+            ("char_204_platnm", 204),
+            ("char_341_sntlla", 341),
+            ("char_4228_closur", 4228),
+            ("char_4081_warmy", 4081),
+        ]
+    ):
+        chars[str(inst_id)] = {
+            "instId": inst_id,
+            "charId": char_id,
+            "skin": f"{char_id}#1",
+            "evolvePhase": 0,
+            "level": 1,
+            "potentialRank": 0,
+            "skills": [{"skillId": f"skill_{index}", "unlock": 1}],
+        }
+    replay = battles.build_battle_replay({"troop": {"chars": chars}}, "main_00-11", 3)
+    assert replay
+    raw = base64.b64decode(replay + "=" * (-len(replay) % 4))
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        payload = json.loads(archive.read("default_entry"))
+    journal = payload["journal"]
+    assert journal["metadata"]["stageId"] == "main_00-11"
+    assert len(journal["squad"]) == 4
+    assert len(journal["logs"]) == 4
+    valid_tiles = {
+        (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8),
+        (2, 4), (2, 6), (2, 7), (2, 8), (3, 1), (3, 2), (3, 3), (3, 4),
+        (3, 5), (3, 6), (3, 7), (3, 8), (4, 1), (4, 2), (4, 3), (4, 4),
+        (4, 5), (4, 6), (4, 7), (4, 8), (5, 1), (5, 2), (5, 3), (5, 4),
+        (5, 5), (5, 6), (5, 7), (5, 8), (6, 1), (6, 2), (6, 3), (6, 4),
+        (6, 5), (6, 6), (6, 7), (6, 8),
+    }
+    for log in journal["logs"]:
+        assert (log["pos"]["row"], log["pos"]["col"]) in valid_tiles
+    by_id = {entry["charInstId"]: entry for entry in journal["squad"]}
+    # The client resolves alternate templates through PlayerCharacter.GetSkills;
+    # seeded accounts have no ``tmpl`` patches, so the replay must request the
+    # default template (empty tmplId) or CheckIfCharSkillAvailable NREs.
+    assert all(entry["tmplId"] == "" for entry in journal["squad"])
+    assert all(log["signiture"]["uniqueId"] in by_id for log in journal["logs"])
+    assert [log["timestamp"] for log in journal["logs"]] == sorted(
+        log["timestamp"] for log in journal["logs"]
+    )
+    assert by_id[264]["level"] == 90
+    assert by_id[4081]["level"] == 80
+    assert by_id[180]["level"] == 90
+    assert by_id[204]["level"] == 80

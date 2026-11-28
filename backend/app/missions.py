@@ -215,9 +215,11 @@ def _ensure_active_tier(user, mission_type):
                 node["state"] = 2
                 current = mission_id
             elif state == 2:
-                # Legacy saves that marked every tier active must collapse
-                # back to the first unfinished tier in this family.
-                node["state"] = 1
+                # Keep an explicitly confirmed row visible.  Only future tiers
+                # (state 1) are collapsed behind the first active row; a
+                # confirmed-but-incomplete row still has to reach the claim
+                # guard so it can be reported as progress-incomplete.
+                current = mission_id
 
 
 def _guide_v3_progress(user, entry):
@@ -492,14 +494,14 @@ def reset_periodic_missions(user, now=None):
     return changed
 
 
-def ensure_mission_state(user):
+def ensure_mission_state(user, now=None):
     """Repair legacy/template mission rows before the client sees them.
 
     CONFIRMED (2) is the state the mission page renders.  IN_EFFECT (1) rows
     are future tiers and are deliberately hidden until the previous tier is
     claimed.  Only one tier per daily/weekly family may be CONFIRMED.
     """
-    reset_periodic_missions(user)
+    reset_periodic_missions(user, now)
     root = mission_root(user)
     for group_id, value in list((root.get("missionGroups") or {}).items()):
         try:
@@ -702,8 +704,8 @@ def _success(items, extra=None):
     return body
 
 
-def claim_missions(user, mission_ids, source="mission"):
-    ensure_mission_state(user)
+def claim_missions(user, mission_ids, source="mission", now=None):
+    ensure_mission_state(user, now)
     root = mission_root(user)
     claimed = []
     skipped = []
@@ -762,7 +764,7 @@ def claim_missions(user, mission_ids, source="mission"):
     return _success(granted_items, {"playerDataDelta": delta, "claimed": claimed, "skipped": skipped})
 
 
-def auto_confirm(user, mission_type):
+def auto_confirm(user, mission_type, now=None):
     mission_types = {
         1: "MAIN",
         2: "DAILY",
@@ -803,7 +805,7 @@ def auto_confirm(user, mission_type):
             if isinstance(bucket.get(mission_id), dict)
             and int(bucket[mission_id].get("state", 0) or 0) == 2
         ]
-        return claim_missions(user, ids, source="mission-auto")
+        return claim_missions(user, ids, source="mission-auto", now=now)
     ids = []
     for bucket_type in bucket_types:
         bucket = mission_bucket(user, bucket_type, create=False)
@@ -812,7 +814,7 @@ def auto_confirm(user, mission_type):
             for mission_id, node in bucket.items()
             if isinstance(node, dict) and int(node.get("state", 0) or 0) == 2
         )
-    return claim_missions(user, ids, source="mission-auto")
+    return claim_missions(user, ids, source="mission-auto", now=now)
 
 
 def confirm_group(user, group_id):
